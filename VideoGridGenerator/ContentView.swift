@@ -1,6 +1,7 @@
 import SwiftUI
 import AVFoundation
 import AppKit
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @State private var selectedVideoURL: URL?
@@ -11,6 +12,7 @@ struct ContentView: View {
     @State private var statusMessage = "Ready"
     @State private var showingAlert = false
     @State private var alertMessage = ""
+    @State private var isDragOver = false
     
     var body: some View {
         VStack(spacing: 20) {
@@ -18,17 +20,38 @@ struct ContentView: View {
                 .font(.title)
                 .padding(.top)
             
-            // File selection
-            HStack {
-                Text(selectedVideoURL?.lastPathComponent ?? "No video selected")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(Color.gray.opacity(0.1))
-                    .cornerRadius(5)
-                
-                Button("Choose Video") {
-                    selectVideoFile()
+            // File selection with drag & drop
+            VStack {
+                HStack {
+                    Text(selectedVideoURL?.lastPathComponent ?? "No video selected")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(Color.gray.opacity(0.1))
+                        .cornerRadius(5)
+                    
+                    Button("Choose Video") {
+                        selectVideoFile()
+                    }
                 }
+                
+                // Drag and drop zone
+                Text("or drag & drop video file here")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [5]))
+                            .foregroundColor(isDragOver ? .blue : .gray.opacity(0.5))
+                    )
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(isDragOver ? Color.blue.opacity(0.1) : Color.clear)
+                    )
+                    .onDrop(of: [.fileURL], isTargeted: $isDragOver) { providers in
+                        handleDrop(providers: providers)
+                    }
             }
             .padding(.horizontal)
             
@@ -68,13 +91,34 @@ struct ContentView: View {
             
             Spacer()
         }
-        .frame(minWidth: 500, minHeight: 300)
+        .frame(minWidth: 500, minHeight: 400)
         .padding()
         .alert("Result", isPresented: $showingAlert) {
             Button("OK", role: .cancel) { }
         } message: {
             Text(alertMessage)
         }
+    }
+    
+    func handleDrop(providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        
+        _ = provider.loadObject(ofClass: URL.self) { url, error in
+            guard let url = url else { return }
+            
+            // Check if it's a video file
+            let allowedExtensions = ["mp4", "m4v", "mov"]
+            let fileExtension = url.pathExtension.lowercased()
+            
+            if allowedExtensions.contains(fileExtension) {
+                DispatchQueue.main.async {
+                    self.selectedVideoURL = url
+                    self.statusMessage = "Video selected: \(url.lastPathComponent)"
+                }
+            }
+        }
+        
+        return true
     }
     
     func selectVideoFile() {
@@ -175,34 +219,55 @@ struct ContentView: View {
             statusMessage = "Compositing grid..."
         }
         
-        // Create grid image
+        // Create grid image with borders and title
         let thumbnailWidth = 400
         let thumbnailHeight = 225
-        let gridWidth = thumbnailWidth * columns
-        let gridHeight = thumbnailHeight * rows
+        let borderWidth = 5
+        let titleHeight = 60
+        let titleMargin = 20
+        
+        let gridWidth = (thumbnailWidth + borderWidth) * columns + borderWidth
+        let gridHeight = (thumbnailHeight + borderWidth) * rows + borderWidth + titleHeight
         
         let gridImage = NSImage(size: NSSize(width: gridWidth, height: gridHeight))
         gridImage.lockFocus()
         
-        // White background
-        NSColor.white.setFill()
+        // Black background
+        NSColor.black.setFill()
         NSRect(x: 0, y: 0, width: gridWidth, height: gridHeight).fill()
         
+        // Draw filename at top
+        let videoFilename = videoURL.lastPathComponent
+        let titleRect = NSRect(x: titleMargin, y: gridHeight - titleHeight + 10, width: gridWidth - titleMargin * 2, height: titleHeight)
+        let titleAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 24, weight: .medium),
+            .foregroundColor: NSColor.white
+        ]
+        videoFilename.draw(in: titleRect, withAttributes: titleAttrs)
+        
+        // Draw thumbnails with borders
         for (index, (image, timestamp)) in images.enumerated() {
             let col = index % columns
             let row = index / columns
-            let x = col * thumbnailWidth
-            let y = (rows - 1 - row) * thumbnailHeight // Flip Y coordinate
+            let x = borderWidth + col * (thumbnailWidth + borderWidth)
+            let y = gridHeight - titleHeight - borderWidth - (row + 1) * (thumbnailHeight + borderWidth)
             
             let destRect = NSRect(x: x, y: y, width: thumbnailWidth, height: thumbnailHeight)
             image.draw(in: destRect)
             
-            // Draw timestamp
-            let textRect = NSRect(x: x + 5, y: y + 5, width: thumbnailWidth - 10, height: 20)
+            // Draw timestamp with shadow
+            let textRect = NSRect(x: x + 5, y: y + 5, width: thumbnailWidth - 10, height: 25)
+            
+            // Create shadow
+            let shadow = NSShadow()
+            shadow.shadowColor = NSColor.black.withAlphaComponent(0.9)
+            shadow.shadowOffset = NSSize(width: 1, height: -1)
+            shadow.shadowBlurRadius = 3
+            
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 14),
+                .font: NSFont.systemFont(ofSize: 16, weight: .semibold),
                 .foregroundColor: NSColor.white,
-                .backgroundColor: NSColor.black.withAlphaComponent(0.7)
+                .shadow: shadow
             ]
             timestamp.draw(in: textRect, withAttributes: attrs)
         }
