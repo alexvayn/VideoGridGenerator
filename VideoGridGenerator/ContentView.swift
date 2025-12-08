@@ -222,12 +222,13 @@ struct ContentView: View {
         // Create grid image with borders and title
         let thumbnailWidth = 400
         let thumbnailHeight = 225
-        let borderWidth = 5
-        let titleHeight = 60
+        let borderWidth = 8  // White border around each frame
+        let framePadding = 15  // Space between frames
+        let titleHeight = 80
         let titleMargin = 20
         
-        let gridWidth = (thumbnailWidth + borderWidth) * columns + borderWidth
-        let gridHeight = (thumbnailHeight + borderWidth) * rows + borderWidth + titleHeight
+        let gridWidth = (thumbnailWidth + borderWidth * 2) * columns + framePadding * (columns + 1)
+        let gridHeight = (thumbnailHeight + borderWidth * 2) * rows + framePadding * (rows + 1) + titleHeight
         
         let gridImage = NSImage(size: NSSize(width: gridWidth, height: gridHeight))
         gridImage.lockFocus()
@@ -236,27 +237,35 @@ struct ContentView: View {
         NSColor.black.setFill()
         NSRect(x: 0, y: 0, width: gridWidth, height: gridHeight).fill()
         
-        // Draw filename at top
+        // Draw filename at top with more vertical space
         let videoFilename = videoURL.lastPathComponent
-        let titleRect = NSRect(x: titleMargin, y: gridHeight - titleHeight + 10, width: gridWidth - titleMargin * 2, height: titleHeight)
+        let titleRect = NSRect(x: titleMargin, y: gridHeight - titleHeight + 15, width: gridWidth - titleMargin * 2, height: titleHeight - 20)
         let titleAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 24, weight: .medium),
             .foregroundColor: NSColor.white
         ]
         videoFilename.draw(in: titleRect, withAttributes: titleAttrs)
         
-        // Draw thumbnails with borders
+        // Draw thumbnails with white borders and padding
         for (index, (image, timestamp)) in images.enumerated() {
             let col = index % columns
             let row = index / columns
-            let x = borderWidth + col * (thumbnailWidth + borderWidth)
-            let y = gridHeight - titleHeight - borderWidth - (row + 1) * (thumbnailHeight + borderWidth)
             
-            let destRect = NSRect(x: x, y: y, width: thumbnailWidth, height: thumbnailHeight)
+            // Calculate position with padding
+            let x = framePadding + col * (thumbnailWidth + borderWidth * 2 + framePadding)
+            let y = gridHeight - titleHeight - framePadding - (row + 1) * (thumbnailHeight + borderWidth * 2 + framePadding)
+            
+            // Draw white border
+            NSColor.white.setFill()
+            let borderRect = NSRect(x: x, y: y, width: thumbnailWidth + borderWidth * 2, height: thumbnailHeight + borderWidth * 2)
+            borderRect.fill()
+            
+            // Draw thumbnail
+            let destRect = NSRect(x: x + borderWidth, y: y + borderWidth, width: thumbnailWidth, height: thumbnailHeight)
             image.draw(in: destRect)
             
             // Draw timestamp with shadow
-            let textRect = NSRect(x: x + 5, y: y + 5, width: thumbnailWidth - 10, height: 25)
+            let textRect = NSRect(x: x + borderWidth + 5, y: y + borderWidth + 5, width: thumbnailWidth - 10, height: 25)
             
             // Create shadow
             let shadow = NSShadow()
