@@ -245,9 +245,11 @@ struct ContentView: View {
                 currentFileName = ""
                 statusMessage = "Complete! Processed \(successCount) of \(totalVideos) video\(totalVideos == 1 ? "" : "s")"
                 
-                // Open Downloads folder
-                let downloadsURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
-                NSWorkspace.shared.open(downloadsURL)
+                // Open the folder containing the first video
+                if let firstVideoURL = selectedVideoURLs.first {
+                    let folderURL = firstVideoURL.deletingLastPathComponent()
+                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: folderURL.path)
+                }
             }
         }
     }
@@ -301,8 +303,8 @@ struct ContentView: View {
         // Create grid image with borders and title
         let thumbnailWidth = 400
         let thumbnailHeight = 225
-        let borderWidth = 4  // White border around each frame
-        let framePadding = 15  // Space between frames
+        let borderWidth = 2  // White border around each frame
+        let framePadding = 8  // Space between frames
         let titleHeight = 80
         let titleMargin = 20
         let bottomPadding = 20  // Padding at the bottom
@@ -363,17 +365,17 @@ struct ContentView: View {
         
         gridImage.unlockFocus()
         
-        // Save to Downloads folder with clean filename
-        let downloadsURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+        // Save to same folder as video file with clean filename
+        let videoDirectory = videoURL.deletingLastPathComponent()
         let baseFilename = videoURL.deletingPathExtension().lastPathComponent
         let outputFilename = "\(baseFilename).jpg"
-        var outputURL = downloadsURL.appendingPathComponent(outputFilename)
+        var outputURL = videoDirectory.appendingPathComponent(outputFilename)
         
         // Handle duplicate filenames
         var counter = 1
         while FileManager.default.fileExists(atPath: outputURL.path) {
             let numberedFilename = "\(baseFilename)_\(counter).jpg"
-            outputURL = downloadsURL.appendingPathComponent(numberedFilename)
+            outputURL = videoDirectory.appendingPathComponent(numberedFilename)
             counter += 1
         }
         

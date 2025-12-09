@@ -1,15 +1,18 @@
+cat > README.md << 'EOF'
 # Video Screenshot Grid Generator
 
 A macOS app that generates JPEG grids of video screenshots with timestamps.
 
 ## Features
-- Supports .mp4 and .m4v files (including 4K)
-- Drag & drop support
+- Batch process multiple videos at once
+- Drag & drop files or entire folders
+- Supports .mp4, .m4v, and .mov files (including 4K)
 - Configurable grid dimensions
-- Black borders around frames
+- Clean filenames matching source videos
+- JPEGs saved next to original video files
+- Thin white borders with compact spacing
 - Filename displayed at top
 - Chronological timestamps with drop shadows
-- Saves to Downloads folder
 
 ## Requirements
 - macOS 12.0+
@@ -20,9 +23,12 @@ A macOS app that generates JPEG grids of video screenshots with timestamps.
 2. Press Cmd+R to build and run
 
 ## Usage
-1. Drag & drop a video file or click "Choose Video"
+1. Drag & drop video files/folders or click "Choose Files"
 2. Set grid dimensions (columns × rows)
-3. Click "Generate Grid"
-4. Find output in Downloads folder
+3. Click "Generate Grids"
+4. Find JPEGs saved next to your original video files
 EOF
 
+git add README.md
+git commit -m "Add README"
+git push
