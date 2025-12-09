@@ -4,14 +4,13 @@ import AppKit
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @State private var selectedVideoURL: URL?
+    @State private var selectedVideoURLs: [URL] = []
     @State private var columns: String = "4"
     @State private var rows: String = "4"
     @State private var isProcessing = false
     @State private var progress: Double = 0
     @State private var statusMessage = "Ready"
-    @State private var showingAlert = false
-    @State private var alertMessage = ""
+    @State private var currentFileName = ""
     @State private var isDragOver = false
     
     var body: some View {
@@ -23,19 +22,36 @@ struct ContentView: View {
             // File selection with drag & drop
             VStack {
                 HStack {
-                    Text(selectedVideoURL?.lastPathComponent ?? "No video selected")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
-                        .background(Color.gray.opacity(0.1))
-                        .cornerRadius(5)
+                    VStack(alignment: .leading, spacing: 4) {
+                        if selectedVideoURLs.isEmpty {
+                            Text("No videos selected")
+                        } else {
+                            Text("\(selectedVideoURLs.count) video\(selectedVideoURLs.count == 1 ? "" : "s") selected")
+                                .font(.headline)
+                            ForEach(selectedVideoURLs.prefix(3), id: \.self) { url in
+                                Text("• \(url.lastPathComponent)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            if selectedVideoURLs.count > 3 {
+                                Text("... and \(selectedVideoURLs.count - 3) more")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(5)
                     
-                    Button("Choose Video") {
-                        selectVideoFile()
+                    Button("Choose Files") {
+                        selectVideoFiles()
                     }
                 }
                 
                 // Drag and drop zone
-                Text("or drag & drop video file here")
+                Text("or drag & drop video files/folders here")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity)
@@ -68,21 +84,29 @@ struct ContentView: View {
             }
             
             // Generate button
-            Button("Generate Grid") {
-                generateGrid()
+            Button("Generate Grids") {
+                generateGrids()
             }
-            .disabled(selectedVideoURL == nil || isProcessing)
+            .disabled(selectedVideoURLs.isEmpty || isProcessing)
             .padding()
-            .background(selectedVideoURL == nil || isProcessing ? Color.gray : Color.blue)
+            .background(selectedVideoURLs.isEmpty || isProcessing ? Color.gray : Color.blue)
             .foregroundColor(.white)
             .cornerRadius(8)
             
             // Progress
             if isProcessing {
-                ProgressView(value: progress, total: 1.0)
-                    .padding(.horizontal)
-                Text(statusMessage)
-                    .font(.caption)
+                VStack(spacing: 8) {
+                    ProgressView(value: progress, total: 1.0)
+                        .padding(.horizontal)
+                    if !currentFileName.isEmpty {
+                        Text("Processing: \(currentFileName)")
+                            .font(.caption)
+                            .foregroundColor(.primary)
+                    }
+                    Text(statusMessage)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             } else {
                 Text(statusMessage)
                     .font(.caption)
@@ -93,88 +117,142 @@ struct ContentView: View {
         }
         .frame(minWidth: 500, minHeight: 400)
         .padding()
-        .alert("Result", isPresented: $showingAlert) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text(alertMessage)
-        }
     }
     
     func handleDrop(providers: [NSItemProvider]) -> Bool {
-        guard let provider = providers.first else { return false }
+        var newURLs: [URL] = []
+        let group = DispatchGroup()
         
-        _ = provider.loadObject(ofClass: URL.self) { url, error in
-            guard let url = url else { return }
-            
-            // Check if it's a video file
-            let allowedExtensions = ["mp4", "m4v", "mov"]
-            let fileExtension = url.pathExtension.lowercased()
-            
-            if allowedExtensions.contains(fileExtension) {
-                DispatchQueue.main.async {
-                    self.selectedVideoURL = url
-                    self.statusMessage = "Video selected: \(url.lastPathComponent)"
+        for provider in providers {
+            group.enter()
+            _ = provider.loadObject(ofClass: URL.self) { url, error in
+                defer { group.leave() }
+                guard let url = url else { return }
+                
+                // Check if it's a directory
+                var isDirectory: ObjCBool = false
+                if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) {
+                    if isDirectory.boolValue {
+                        // It's a folder - get all video files inside
+                        let videos = self.getVideoFilesInDirectory(url)
+                        newURLs.append(contentsOf: videos)
+                    } else {
+                        // It's a file - check if it's a video
+                        let allowedExtensions = ["mp4", "m4v", "mov"]
+                        let fileExtension = url.pathExtension.lowercased()
+                        if allowedExtensions.contains(fileExtension) {
+                            newURLs.append(url)
+                        }
+                    }
                 }
+            }
+        }
+        
+        group.notify(queue: .main) {
+            if !newURLs.isEmpty {
+                self.selectedVideoURLs = newURLs
+                self.statusMessage = "Selected \(newURLs.count) video\(newURLs.count == 1 ? "" : "s")"
             }
         }
         
         return true
     }
     
-    func selectVideoFile() {
+    func getVideoFilesInDirectory(_ directoryURL: URL) -> [URL] {
+        var videoFiles: [URL] = []
+        let allowedExtensions = ["mp4", "m4v", "mov"]
+        
+        if let enumerator = FileManager.default.enumerator(at: directoryURL, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) {
+            for case let fileURL as URL in enumerator {
+                let fileExtension = fileURL.pathExtension.lowercased()
+                if allowedExtensions.contains(fileExtension) {
+                    videoFiles.append(fileURL)
+                }
+            }
+        }
+        
+        return videoFiles
+    }
+    
+    func selectVideoFiles() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.mpeg4Movie, .quickTimeMovie]
-        panel.allowsMultipleSelection = false
-        panel.message = "Select a video file"
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.message = "Select video files or folders"
         
         if panel.runModal() == .OK {
-            selectedVideoURL = panel.url
-            statusMessage = "Video selected: \(panel.url?.lastPathComponent ?? "")"
+            var allVideos: [URL] = []
+            
+            for url in panel.urls {
+                var isDirectory: ObjCBool = false
+                if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) {
+                    if isDirectory.boolValue {
+                        allVideos.append(contentsOf: getVideoFilesInDirectory(url))
+                    } else {
+                        allVideos.append(url)
+                    }
+                }
+            }
+            
+            selectedVideoURLs = allVideos
+            statusMessage = "Selected \(allVideos.count) video\(allVideos.count == 1 ? "" : "s")"
         }
     }
     
-    func generateGrid() {
-        guard let videoURL = selectedVideoURL,
+    func generateGrids() {
+        guard !selectedVideoURLs.isEmpty,
               let cols = Int(columns), cols > 0,
               let rws = Int(rows), rws > 0 else {
-            alertMessage = "Please select a video and enter valid grid dimensions"
-            showingAlert = true
+            statusMessage = "Please select videos and enter valid grid dimensions"
             return
         }
         
         isProcessing = true
         progress = 0
-        statusMessage = "Loading video..."
+        statusMessage = "Starting batch processing..."
         
         Task {
-            do {
-                let outputURL = try await createScreenshotGrid(
-                    videoURL: videoURL,
-                    columns: cols,
-                    rows: rws
-                )
+            var successCount = 0
+            let totalVideos = selectedVideoURLs.count
+            
+            for (index, videoURL) in selectedVideoURLs.enumerated() {
+                await MainActor.run {
+                    currentFileName = videoURL.lastPathComponent
+                    statusMessage = "Processing \(index + 1) of \(totalVideos)"
+                }
+                
+                do {
+                    _ = try await createScreenshotGrid(
+                        videoURL: videoURL,
+                        columns: cols,
+                        rows: rws,
+                        overallProgress: Double(index) / Double(totalVideos)
+                    )
+                    successCount += 1
+                } catch {
+                    print("Error processing \(videoURL.lastPathComponent): \(error)")
+                }
                 
                 await MainActor.run {
-                    isProcessing = false
-                    statusMessage = "Complete!"
-                    alertMessage = "Grid saved to:\n\(outputURL.path)"
-                    showingAlert = true
-                    
-                    // Open the file in Finder
-                    NSWorkspace.shared.selectFile(outputURL.path, inFileViewerRootedAtPath: "")
+                    progress = Double(index + 1) / Double(totalVideos)
                 }
-            } catch {
-                await MainActor.run {
-                    isProcessing = false
-                    statusMessage = "Error occurred"
-                    alertMessage = "Error: \(error.localizedDescription)"
-                    showingAlert = true
-                }
+            }
+            
+            await MainActor.run {
+                isProcessing = false
+                currentFileName = ""
+                statusMessage = "Complete! Processed \(successCount) of \(totalVideos) video\(totalVideos == 1 ? "" : "s")"
+                
+                // Open Downloads folder
+                let downloadsURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+                NSWorkspace.shared.open(downloadsURL)
             }
         }
     }
     
-    func createScreenshotGrid(videoURL: URL, columns: Int, rows: Int) async throws -> URL {
+    func createScreenshotGrid(videoURL: URL, columns: Int, rows: Int, overallProgress: Double) async throws -> URL {
         let asset = AVAsset(url: videoURL)
         let duration = try await asset.load(.duration)
         let totalSeconds = CMTimeGetSeconds(duration)
@@ -198,7 +276,8 @@ struct ContentView: View {
         
         for (index, time) in timestamps.enumerated() {
             await MainActor.run {
-                progress = Double(index) / Double(totalFrames)
+                let frameProgress = Double(index) / Double(totalFrames)
+                progress = overallProgress + (frameProgress / Double(selectedVideoURLs.count))
                 statusMessage = "Capturing frame \(index + 1) of \(totalFrames)..."
             }
             
@@ -222,13 +301,14 @@ struct ContentView: View {
         // Create grid image with borders and title
         let thumbnailWidth = 400
         let thumbnailHeight = 225
-        let borderWidth = 8  // White border around each frame
+        let borderWidth = 4  // White border around each frame
         let framePadding = 15  // Space between frames
         let titleHeight = 80
         let titleMargin = 20
+        let bottomPadding = 20  // Padding at the bottom
         
         let gridWidth = (thumbnailWidth + borderWidth * 2) * columns + framePadding * (columns + 1)
-        let gridHeight = (thumbnailHeight + borderWidth * 2) * rows + framePadding * (rows + 1) + titleHeight
+        let gridHeight = (thumbnailHeight + borderWidth * 2) * rows + framePadding * (rows + 1) + titleHeight + bottomPadding
         
         let gridImage = NSImage(size: NSSize(width: gridWidth, height: gridHeight))
         gridImage.lockFocus()
@@ -283,10 +363,19 @@ struct ContentView: View {
         
         gridImage.unlockFocus()
         
-        // Save to Downloads folder
+        // Save to Downloads folder with clean filename
         let downloadsURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
-        let filename = "grid_\(videoURL.deletingPathExtension().lastPathComponent)_\(Date().timeIntervalSince1970).jpg"
-        let outputURL = downloadsURL.appendingPathComponent(filename)
+        let baseFilename = videoURL.deletingPathExtension().lastPathComponent
+        let outputFilename = "\(baseFilename).jpg"
+        var outputURL = downloadsURL.appendingPathComponent(outputFilename)
+        
+        // Handle duplicate filenames
+        var counter = 1
+        while FileManager.default.fileExists(atPath: outputURL.path) {
+            let numberedFilename = "\(baseFilename)_\(counter).jpg"
+            outputURL = downloadsURL.appendingPathComponent(numberedFilename)
+            counter += 1
+        }
         
         if let tiffData = gridImage.tiffRepresentation,
            let bitmap = NSBitmapImageRep(data: tiffData),
