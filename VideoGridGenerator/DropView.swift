@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-// AppKit-based drop view that preserves security-scoped access
+// AppKit-based drop view - extracts URLs without handling security scope
 struct DropView: NSViewRepresentable {
     @Binding var isDragOver: Bool
     let onDrop: ([URL]) -> Void
@@ -48,15 +48,9 @@ class DropTargetView: NSView {
             return false
         }
         
-        // Start accessing security-scoped resources immediately
-        var accessibleURLs: [URL] = []
-        for url in urls {
-            let hasAccess = url.startAccessingSecurityScopedResource()
-            print("🔐 Drag & Drop: \(url.lastPathComponent), security access: \(hasAccess)")
-            accessibleURLs.append(url)
-        }
-        
-        onDrop?(accessibleURLs)
+        // Just pass URLs without managing security scope
+        // GeneratorViewModel will handle security access
+        onDrop?(urls)
         return true
     }
 }

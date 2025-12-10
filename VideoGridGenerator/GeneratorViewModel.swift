@@ -50,6 +50,10 @@ class GeneratorViewModel: ObservableObject {
     private let frameExtractor = FrameExtractor()
     private let gridComposer = GridComposer()
     private var outputFolderAccess = false
+    private var generationTask: Task<Void, Never>?
+    
+    // Debug logging flag
+    private let debugLogging = false
     
     // MARK: - File Selection
     
@@ -60,7 +64,7 @@ class GeneratorViewModel: ObservableObject {
     
     func addVideos(_ urls: [URL]) {
         for url in urls {
-            // Start accessing security-scoped resource
+            // Start accessing security-scoped resource (centralized)
             let hasAccess = url.startAccessingSecurityScopedResource()
             
             var job = VideoJob(url: url)
@@ -68,7 +72,9 @@ class GeneratorViewModel: ObservableObject {
             videoJobs[job.id] = job
             jobOrder.append(job.id)
             
-            print("📁 Added video: \(url.lastPathComponent), security access: \(hasAccess)")
+            if debugLogging {
+                print("📁 Added video: \(url.lastPathComponent), security access: \(hasAccess)")
+            }
         }
     }
     
@@ -80,7 +86,12 @@ class GeneratorViewModel: ObservableObject {
             var isDirectory: ObjCBool = false
             if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) {
                 if isDirectory.boolValue {
+                    // Directory: start access, enumerate, then stop
+                    let dirHasAccess = url.startAccessingSecurityScopedResource()
                     result.append(contentsOf: getVideoFilesInDirectory(url))
+                    if dirHasAccess {
+                        url.stopAccessingSecurityScopedResource()
+                    }
                 } else if allowedExtensions.contains(url.pathExtension.lowercased()) {
                     result.append(url)
                 }
@@ -126,8 +137,10 @@ class GeneratorViewModel: ObservableObject {
             outputFolderAccess = url.startAccessingSecurityScopedResource()
             outputFolderURL = url
             
-            print("📂 Output folder set to: \(url.path)")
-            print("🔐 Security access granted: \(outputFolderAccess)")
+            if debugLogging {
+                print("📂 Output folder set to: \(url.path)")
+                print("🔐 Security access granted: \(outputFolderAccess)")
+            }
         }
     }
     
@@ -144,12 +157,22 @@ class GeneratorViewModel: ObservableObject {
     func generateGrids() {
         guard !videoJobs.isEmpty else { return }
         
+        // Cancel any existing generation task
+        generationTask?.cancel()
+        
         isProcessing = true
         completedCount = 0
         cancellationTokens.removeAll()
         
-        Task {
+        generationTask = Task {
             await processVideosWithSemaphore()
+            
+            guard !Task.isCancelled else {
+                await MainActor.run {
+                    isProcessing = false
+                }
+                return
+            }
             
             await MainActor.run {
                 isProcessing = false
@@ -163,14 +186,20 @@ class GeneratorViewModel: ObservableObject {
     }
     
     func cancelGeneration() {
+        // Cancel the task
+        generationTask?.cancel()
+        
+        // Mark all incomplete jobs as cancelled
         for jobId in jobOrder {
             cancellationTokens.insert(jobId)
             if var job = videoJobs[jobId], !job.isComplete {
                 job.isCancelled = true
                 job.status = "Cancelled"
+                job.isComplete = true
                 videoJobs[jobId] = job
             }
         }
+        
         isProcessing = false
     }
     
@@ -179,10 +208,21 @@ class GeneratorViewModel: ObservableObject {
             let semaphore = AsyncSemaphore(value: maxConcurrent)
             
             for jobId in jobOrder {
+                // Check if task is cancelled before adding new work
+                guard !Task.isCancelled else {
+                    break
+                }
+                
                 guard let job = videoJobs[jobId] else { continue }
                 
                 group.addTask {
                     await semaphore.wait()
+                    
+                    // Check cancellation after acquiring semaphore
+                    if Task.isCancelled {
+                        await semaphore.signal()
+                        return
+                    }
                     
                     await self.processVideo(jobId: jobId, url: job.url)
                     
@@ -195,12 +235,14 @@ class GeneratorViewModel: ObservableObject {
     }
     
     private func processVideo(jobId: UUID, url: URL) async {
-        guard !cancellationTokens.contains(jobId) else {
+        // Early exit if cancelled
+        guard !Task.isCancelled && !cancellationTokens.contains(jobId) else {
             await updateJob(jobId: jobId) { job in
                 job.isCancelled = true
                 job.status = "Cancelled"
                 job.isComplete = true
             }
+            await releaseSecurityAccess(for: jobId)
             return
         }
         
@@ -232,12 +274,13 @@ class GeneratorViewModel: ObservableObject {
                 }
             )
             
-            guard !cancellationTokens.contains(jobId) else {
+            guard !Task.isCancelled && !cancellationTokens.contains(jobId) else {
                 await updateJob(jobId: jobId) { job in
                     job.isCancelled = true
                     job.status = "Cancelled"
                     job.isComplete = true
                 }
+                await releaseSecurityAccess(for: jobId)
                 return
             }
             
@@ -250,7 +293,7 @@ class GeneratorViewModel: ObservableObject {
                 frames: frames,
                 sourceURL: url,
                 config: config,
-                outputFolder: outputFolderURL
+                outputFolder: self.outputFolderURL
             )
             
             await updateJob(jobId: jobId) { job in
@@ -273,10 +316,18 @@ class GeneratorViewModel: ObservableObject {
             print("❌ Error processing \(url.lastPathComponent): \(error)")
         }
         
-        // Release security-scoped resource when done
-        if let job = await MainActor.run(body: { videoJobs[jobId] }), job.hasSecurityAccess {
-            url.stopAccessingSecurityScopedResource()
-            print("🔓 Released security access for: \(url.lastPathComponent)")
+        // Always release security access when done
+        await releaseSecurityAccess(for: jobId)
+    }
+    
+    private func releaseSecurityAccess(for jobId: UUID) async {
+        await MainActor.run {
+            if let job = videoJobs[jobId], job.hasSecurityAccess {
+                job.url.stopAccessingSecurityScopedResource()
+                if debugLogging {
+                    print("🔓 Released security access for: \(job.url.lastPathComponent)")
+                }
+            }
         }
     }
     
@@ -297,7 +348,7 @@ class GeneratorViewModel: ObservableObject {
     }
 }
 
-// MARK: - AsyncSemaphore
+// MARK: - AsyncSemaphore (Cancellation-aware)
 
 actor AsyncSemaphore {
     private var value: Int
@@ -322,5 +373,14 @@ actor AsyncSemaphore {
             let waiter = waiters.removeFirst()
             waiter.resume()
         }
+    }
+    
+    // Allow cancelling all waiters (prevents deadlock on task cancellation)
+    func cancelAll() {
+        while !waiters.isEmpty {
+            let waiter = waiters.removeFirst()
+            waiter.resume()
+        }
+        value = 0
     }
 }
