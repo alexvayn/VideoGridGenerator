@@ -12,7 +12,6 @@ struct GridConfig {
 
 class GridComposer {
     func composeGrid(frames: [ExtractedFrame], sourceURL: URL, config: GridConfig, outputFolder: URL? = nil) async throws -> URL {
-        
         let borderWidth = 2
         let framePadding = 8
         let titleHeight = 80
@@ -79,15 +78,15 @@ class GridComposer {
             // Timestamp
             if config.showTimestamps {
                 let timestamp = formatTimestamp(CMTimeGetSeconds(frame.timestamp))
-                let textRect = NSRect(x: x + borderWidth + 5, y: y + borderWidth + 5, width: thumbnailWidth - 10, height: 25)
+                let textRect = NSRect(x: x + borderWidth + 8, y: y + borderWidth + 8, width: thumbnailWidth - 16, height: 30)
                 
                 let shadow = NSShadow()
                 shadow.shadowColor = NSColor.black.withAlphaComponent(0.9)
                 shadow.shadowOffset = NSSize(width: 1, height: -1)
-                shadow.shadowBlurRadius = 3
+                shadow.shadowBlurRadius = 4
                 
                 let attrs: [NSAttributedString.Key: Any] = [
-                    .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
+                    .font: NSFont.systemFont(ofSize: 18, weight: .bold),
                     .foregroundColor: NSColor.white,
                     .shadow: shadow
                 ]
@@ -98,7 +97,7 @@ class GridComposer {
         gridImage.unlockFocus()
         
         // Save file
-        let outputURL = try resolveOutputURL(for: sourceURL, config: config)
+        let outputURL = try resolveOutputURL(for: sourceURL, config: config, outputFolder: outputFolder)
         
         print("🎨 Grid image composed, size: \(gridWidth)×\(gridHeight)")
         
@@ -153,9 +152,24 @@ class GridComposer {
         image.draw(in: drawRect, from: .zero, operation: .copy, fraction: 1.0)
     }
     
-    private func resolveOutputURL(for videoURL: URL, config: GridConfig) throws -> URL {
+    private func resolveOutputURL(for videoURL: URL, config: GridConfig, outputFolder: URL? = nil) throws -> URL {
         let baseFilename = videoURL.deletingPathExtension().lastPathComponent
         let outputFilename = "\(baseFilename)_\(config.rows)x\(config.columns).jpg"
+        
+        // If user selected an output folder, use that
+        if let customFolder = outputFolder {
+            var outputURL = customFolder.appendingPathComponent(outputFilename)
+            
+            var counter = 1
+            while FileManager.default.fileExists(atPath: outputURL.path) {
+                let numberedFilename = "\(baseFilename)_\(config.rows)x\(config.columns)_\(counter).jpg"
+                outputURL = customFolder.appendingPathComponent(numberedFilename)
+                counter += 1
+            }
+            
+            print("✅ Will write to custom folder: \(outputURL.path)")
+            return outputURL
+        }
         
         // Try to write to same directory as video
         let videoDirectory = videoURL.deletingLastPathComponent()
@@ -181,7 +195,7 @@ class GridComposer {
         } catch {
             // Can't write to video directory, use user's actual Downloads folder
             print("⚠️ Cannot write to video directory: \(error)")
-            print("⚠️ Saving to your Downloads folder instead")
+            print("💡 Tip: Click 'Set Output Folder' to choose where to save files")
             
             // Get the real Downloads folder (not sandboxed)
             let homeURL = FileManager.default.homeDirectoryForCurrentUser

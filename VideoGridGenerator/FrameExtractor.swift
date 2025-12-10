@@ -61,13 +61,14 @@ class FrameExtractor {
         print("🎬 Starting distinctness selection: \(candidates.count) candidates → \(count) needed")
         
         // Calculate multiple distinctness metrics for each frame
-        var frameMetrics: [(index: Int, histogram: [Double], edges: Double, brightness: Double)] = []
+        var frameMetrics: [(index: Int, histogram: [Double], edges: Double, brightness: Double, variance: Double)] = []
         
         for (index, candidate) in candidates.enumerated() {
             if let histogram = computeHistogram(candidate.image),
                let edges = computeEdgeDensity(candidate.image),
-               let brightness = computeBrightness(candidate.image) {
-                frameMetrics.append((index: index, histogram: histogram, edges: edges, brightness: brightness))
+               let brightness = computeBrightness(candidate.image),
+               let variance = computeColorVariance(candidate.image) {
+                frameMetrics.append((index: index, histogram: histogram, edges: edges, brightness: brightness, variance: variance))
             }
         }
         
@@ -77,12 +78,17 @@ class FrameExtractor {
         }
         
         // Filter out extremely dark or bright frames (likely fades/transitions)
+        // Also filter out frames with very low edge density (solid colors/blank frames)
+        // And filter out frames with low color variance (uniform/gradient backgrounds)
         let validFrames = frameMetrics.filter { metric in
-            metric.brightness > 0.15 && metric.brightness < 0.85
+            let hasGoodBrightness = metric.brightness > 0.15 && metric.brightness < 0.85
+            let hasContent = metric.edges > 0.05  // Increased threshold - must have visible detail
+            let hasVariety = metric.variance > 0.01  // Must have color variation (not solid/gradient)
+            return hasGoodBrightness && hasContent && hasVariety
         }
         
         // If brightness filter removed too many frames, use all candidates
-        let framesToScore: [(index: Int, histogram: [Double], edges: Double, brightness: Double)]
+        let framesToScore: [(index: Int, histogram: [Double], edges: Double, brightness: Double, variance: Double)]
         if validFrames.count < count {
             print("⚠️ Brightness filter too aggressive (\(validFrames.count) < \(count)), using all \(frameMetrics.count) frames")
             framesToScore = frameMetrics
@@ -319,5 +325,59 @@ class FrameExtractor {
         }
         
         return totalBrightness / Double(width * height)
+    }
+    
+    private func computeColorVariance(_ image: NSImage) -> Double? {
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return nil
+        }
+        
+        let width = 32
+        let height = 32
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bytesPerPixel = 4
+        let bytesPerRow = bytesPerPixel * width
+        
+        var pixelData = [UInt8](repeating: 0, count: width * height * bytesPerPixel)
+        
+        guard let context = CGContext(
+            data: &pixelData,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+        
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        
+        // Calculate variance in RGB channels
+        var rValues: [Double] = []
+        var gValues: [Double] = []
+        var bValues: [Double] = []
+        
+        for i in stride(from: 0, to: pixelData.count, by: bytesPerPixel) {
+            rValues.append(Double(pixelData[i]) / 255.0)
+            gValues.append(Double(pixelData[i + 1]) / 255.0)
+            bValues.append(Double(pixelData[i + 2]) / 255.0)
+        }
+        
+        let rVariance = calculateVariance(rValues)
+        let gVariance = calculateVariance(gValues)
+        let bVariance = calculateVariance(bValues)
+        
+        // Return average variance across channels
+        return (rVariance + gVariance + bVariance) / 3.0
+    }
+    
+    private func calculateVariance(_ values: [Double]) -> Double {
+        guard !values.isEmpty else { return 0 }
+        
+        let mean = values.reduce(0, +) / Double(values.count)
+        let squaredDiffs = values.map { pow($0 - mean, 2) }
+        return squaredDiffs.reduce(0, +) / Double(values.count)
     }
 }

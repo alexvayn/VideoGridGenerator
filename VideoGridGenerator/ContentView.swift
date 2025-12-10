@@ -6,34 +6,91 @@ struct ContentView: View {
     @State private var isDragOver = false
     
     var body: some View {
-        VStack(spacing: 20) {
-            Text("Video Grid Generator")
-                .font(.title)
+        HSplitView {
+            // Left side: Main controls (75%)
+            VStack(spacing: 20) {
+                Text("Video Grid Generator")
+                    .font(.title)
+                    .padding(.top)
+                
+                // File selection
+                fileSelectionView
+                
+                // Settings
+                settingsView
+                
+                // Action buttons
+                actionButtonsView
+                
+                // Last output
+                if let lastOutput = viewModel.lastOutputPath {
+                    lastOutputView(lastOutput)
+                }
+                
+                Spacer()
+            }
+            .frame(minWidth: 500)
+            .padding()
+            
+            // Right side: Progress view (25%)
+            VStack(spacing: 12) {
+                HStack {
+                    Text("Processing Queue")
+                        .font(.headline)
+                    Spacer()
+                    if !viewModel.videoJobs.isEmpty && !viewModel.isProcessing {
+                        Button("Clear Completed") {
+                            viewModel.clearCompleted()
+                        }
+                        .buttonStyle(BorderlessButtonStyle())
+                        .font(.caption)
+                    }
+                }
+                .padding(.horizontal)
                 .padding(.top)
-            
-            // File selection
-            fileSelectionView
-            
-            // Settings
-            settingsView
-            
-            // Action buttons
-            actionButtonsView
-            
-            // Last output
-            if let lastOutput = viewModel.lastOutputPath {
-                lastOutputView(lastOutput)
+                
+                if viewModel.isProcessing {
+                    Text("\(viewModel.completedCount) of \(viewModel.videoJobs.count) completed")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                
+                if viewModel.videoJobs.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "photo.stack")
+                            .font(.system(size: 48))
+                            .foregroundColor(.secondary.opacity(0.5))
+                        Text("No videos selected")
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        VStack(spacing: 8) {
+                            // Active jobs
+                            ForEach(viewModel.jobOrder, id: \.self) { jobId in
+                                if let job = viewModel.videoJobs[jobId], !job.isComplete {
+                                    jobProgressView(job)
+                                }
+                            }
+                            
+                            // Completed jobs
+                            ForEach(viewModel.jobOrder, id: \.self) { jobId in
+                                if let job = viewModel.videoJobs[jobId], job.isComplete {
+                                    completedJobView(job)
+                                }
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
+                }
+                
+                Spacer()
             }
-            
-            // Progress
-            if viewModel.isProcessing {
-                progressView
-            }
-            
-            Spacer()
+            .frame(minWidth: 250, maxWidth: 400)
+            .background(Color.gray.opacity(0.05))
         }
-        .frame(minWidth: 700, minHeight: 600)
-        .padding()
+        .frame(minWidth: 900, minHeight: 600)
     }
     
     // MARK: - Subviews
@@ -225,16 +282,6 @@ struct ContentView: View {
                 .foregroundColor(.white)
                 .cornerRadius(8)
             }
-            
-            if !viewModel.videoJobs.isEmpty && !viewModel.isProcessing {
-                Button("Clear Completed") {
-                    viewModel.clearCompleted()
-                }
-                .padding()
-                .background(Color.secondary)
-                .foregroundColor(.white)
-                .cornerRadius(8)
-            }
         }
     }
     
@@ -261,32 +308,6 @@ struct ContentView: View {
         .background(Color.green.opacity(0.1))
         .cornerRadius(5)
         .padding(.horizontal)
-    }
-    
-    private var progressView: some View {
-        VStack(spacing: 12) {
-            Text("Processing: \(viewModel.completedCount) of \(viewModel.videoJobs.count) completed")
-                .font(.headline)
-            
-            ScrollView {
-                VStack(spacing: 8) {
-                    ForEach(viewModel.jobOrder, id: \.self) { jobId in
-                        if let job = viewModel.videoJobs[jobId], !job.isComplete {
-                            jobProgressView(job)
-                        }
-                    }
-                    
-                    // Completed jobs with output paths
-                    ForEach(viewModel.jobOrder, id: \.self) { jobId in
-                        if let job = viewModel.videoJobs[jobId], job.isComplete {
-                            completedJobView(job)
-                        }
-                    }
-                }
-            }
-            .frame(maxHeight: 300)
-            .padding(.horizontal)
-        }
     }
     
     private func jobProgressView(_ job: VideoJob) -> some View {
