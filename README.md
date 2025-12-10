@@ -1,4 +1,3 @@
-cat > README.md << 'EOF'
 # Video Screenshot Grid Generator
 
 A macOS app that generates JPEG grids of video screenshots with timestamps, optimized for Apple Silicon.
@@ -38,8 +37,3 @@ A macOS app that generates JPEG grids of video screenshots with timestamps, opti
 - Default 5 concurrent tasks works well for most M1 Max setups
 - Increase to 8-10 for smaller videos or if you have extra RAM
 - Decrease to 3-4 for very large 4K videos
-EOF
-
-git add README.md
-git commit -m "Add README with parallel processing details"
-git push
