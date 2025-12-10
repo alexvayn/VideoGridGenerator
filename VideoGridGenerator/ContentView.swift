@@ -3,15 +3,24 @@ import AVFoundation
 import AppKit
 import UniformTypeIdentifiers
 
+struct VideoProgress: Identifiable {
+    let id = UUID()
+    let filename: String
+    var progress: Double
+    var status: String
+}
+
 struct ContentView: View {
     @State private var selectedVideoURLs: [URL] = []
     @State private var columns: String = "4"
     @State private var rows: String = "4"
+    @State private var parallelProcessing: String = "5"
     @State private var isProcessing = false
-    @State private var progress: Double = 0
+    @State private var videoProgresses: [VideoProgress] = []
     @State private var statusMessage = "Ready"
-    @State private var currentFileName = ""
     @State private var isDragOver = false
+    @State private var completedCount = 0
+    @State private var totalCount = 0
     
     var body: some View {
         VStack(spacing: 20) {
@@ -71,16 +80,29 @@ struct ContentView: View {
             }
             .padding(.horizontal)
             
-            // Grid dimensions
-            HStack {
-                Text("Grid Size:")
-                TextField("Columns", text: $columns)
-                    .frame(width: 60)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                Text("×")
-                TextField("Rows", text: $rows)
-                    .frame(width: 60)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
+            // Grid dimensions and parallel processing
+            HStack(spacing: 20) {
+                HStack {
+                    Text("Grid Size:")
+                    TextField("Columns", text: $columns)
+                        .frame(width: 60)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                    Text("×")
+                    TextField("Rows", text: $rows)
+                        .frame(width: 60)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                }
+                
+                Divider()
+                    .frame(height: 30)
+                
+                HStack {
+                    Text("Parallel:")
+                    TextField("Files", text: $parallelProcessing)
+                        .frame(width: 60)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                    Text("files")
+                }
             }
             
             // Generate button
@@ -95,17 +117,39 @@ struct ContentView: View {
             
             // Progress
             if isProcessing {
-                VStack(spacing: 8) {
-                    ProgressView(value: progress, total: 1.0)
-                        .padding(.horizontal)
-                    if !currentFileName.isEmpty {
-                        Text("Processing: \(currentFileName)")
-                            .font(.caption)
-                            .foregroundColor(.primary)
+                VStack(spacing: 12) {
+                    Text("Processing \(completedCount) of \(totalCount) completed")
+                        .font(.headline)
+                    
+                    ScrollView {
+                        VStack(spacing: 8) {
+                            ForEach(videoProgresses) { videoProgress in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack {
+                                        Text(videoProgress.filename)
+                                            .font(.caption)
+                                            .lineLimit(1)
+                                        Spacer()
+                                        Text("\(Int(videoProgress.progress * 100))%")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    
+                                    ProgressView(value: videoProgress.progress, total: 1.0)
+                                        .progressViewStyle(LinearProgressViewStyle())
+                                    
+                                    Text(videoProgress.status)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding(8)
+                                .background(Color.gray.opacity(0.1))
+                                .cornerRadius(5)
+                            }
+                        }
                     }
-                    Text(statusMessage)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    .frame(maxHeight: 200)
+                    .padding(.horizontal)
                 }
             } else {
                 Text(statusMessage)
@@ -115,7 +159,7 @@ struct ContentView: View {
             
             Spacer()
         }
-        .frame(minWidth: 500, minHeight: 400)
+        .frame(minWidth: 600, minHeight: 500)
         .padding()
     }
     
@@ -204,46 +248,29 @@ struct ContentView: View {
     func generateGrids() {
         guard !selectedVideoURLs.isEmpty,
               let cols = Int(columns), cols > 0,
-              let rws = Int(rows), rws > 0 else {
-            statusMessage = "Please select videos and enter valid grid dimensions"
+              let rws = Int(rows), rws > 0,
+              let maxParallel = Int(parallelProcessing), maxParallel > 0 else {
+            statusMessage = "Please select videos and enter valid settings"
             return
         }
         
         isProcessing = true
-        progress = 0
-        statusMessage = "Starting batch processing..."
+        completedCount = 0
+        totalCount = selectedVideoURLs.count
+        videoProgresses = []
         
         Task {
-            var successCount = 0
-            let totalVideos = selectedVideoURLs.count
-            
-            for (index, videoURL) in selectedVideoURLs.enumerated() {
-                await MainActor.run {
-                    currentFileName = videoURL.lastPathComponent
-                    statusMessage = "Processing \(index + 1) of \(totalVideos)"
-                }
-                
-                do {
-                    _ = try await createScreenshotGrid(
-                        videoURL: videoURL,
-                        columns: cols,
-                        rows: rws,
-                        overallProgress: Double(index) / Double(totalVideos)
-                    )
-                    successCount += 1
-                } catch {
-                    print("Error processing \(videoURL.lastPathComponent): \(error)")
-                }
-                
-                await MainActor.run {
-                    progress = Double(index + 1) / Double(totalVideos)
-                }
-            }
+            await processVideosInParallel(
+                urls: selectedVideoURLs,
+                columns: cols,
+                rows: rws,
+                maxConcurrent: maxParallel
+            )
             
             await MainActor.run {
                 isProcessing = false
-                currentFileName = ""
-                statusMessage = "Complete! Processed \(successCount) of \(totalVideos) video\(totalVideos == 1 ? "" : "s")"
+                statusMessage = "Complete! Processed \(completedCount) of \(totalCount) video\(totalCount == 1 ? "" : "s")"
+                videoProgresses = []
                 
                 // Open the folder containing the first video
                 if let firstVideoURL = selectedVideoURLs.first {
@@ -254,11 +281,90 @@ struct ContentView: View {
         }
     }
     
-    func createScreenshotGrid(videoURL: URL, columns: Int, rows: Int, overallProgress: Double) async throws -> URL {
+    func processVideosInParallel(urls: [URL], columns: Int, rows: Int, maxConcurrent: Int) async {
+        await withTaskGroup(of: Void.self) { group in
+            var activeCount = 0
+            var index = 0
+            
+            while index < urls.count {
+                // Add tasks up to max concurrent
+                while activeCount < maxConcurrent && index < urls.count {
+                    let videoURL = urls[index]
+                    let videoIndex = index
+                    
+                    // Create progress tracker
+                    await MainActor.run {
+                        videoProgresses.append(VideoProgress(
+                            filename: videoURL.lastPathComponent,
+                            progress: 0,
+                            status: "Starting..."
+                        ))
+                    }
+                    
+                    group.addTask {
+                        await self.processVideo(
+                            videoURL: videoURL,
+                            columns: columns,
+                            rows: rows,
+                            progressIndex: videoIndex
+                        )
+                    }
+                    
+                    activeCount += 1
+                    index += 1
+                }
+                
+                // Wait for at least one task to complete
+                await group.next()
+                activeCount -= 1
+            }
+            
+            // Wait for remaining tasks
+            await group.waitForAll()
+        }
+    }
+    
+    func processVideo(videoURL: URL, columns: Int, rows: Int, progressIndex: Int) async {
+        do {
+            _ = try await createScreenshotGrid(
+                videoURL: videoURL,
+                columns: columns,
+                rows: rows,
+                progressIndex: progressIndex
+            )
+            
+            await MainActor.run {
+                completedCount += 1
+                // Remove from progress list when done
+                videoProgresses.removeAll { $0.filename == videoURL.lastPathComponent }
+            }
+        } catch {
+            await MainActor.run {
+                if let index = videoProgresses.firstIndex(where: { $0.filename == videoURL.lastPathComponent }) {
+                    videoProgresses[index].status = "Error: \(error.localizedDescription)"
+                    videoProgresses[index].progress = 0
+                }
+                completedCount += 1
+            }
+        }
+    }
+    
+    func updateProgress(index: Int, progress: Double, status: String) async {
+        await MainActor.run {
+            if index < videoProgresses.count {
+                videoProgresses[index].progress = progress
+                videoProgresses[index].status = status
+            }
+        }
+    }
+    
+    func createScreenshotGrid(videoURL: URL, columns: Int, rows: Int, progressIndex: Int) async throws -> URL {
         let asset = AVAsset(url: videoURL)
         let duration = try await asset.load(.duration)
         let totalSeconds = CMTimeGetSeconds(duration)
         let totalFrames = columns * rows
+        
+        await updateProgress(index: progressIndex, progress: 0.1, status: "Loading video...")
         
         // Generate timestamps evenly distributed
         var timestamps: [CMTime] = []
@@ -277,11 +383,12 @@ struct ContentView: View {
         var images: [(NSImage, String)] = []
         
         for (index, time) in timestamps.enumerated() {
-            await MainActor.run {
-                let frameProgress = Double(index) / Double(totalFrames)
-                progress = overallProgress + (frameProgress / Double(selectedVideoURLs.count))
-                statusMessage = "Capturing frame \(index + 1) of \(totalFrames)..."
-            }
+            let frameProgress = 0.1 + (Double(index) / Double(totalFrames)) * 0.7
+            await updateProgress(
+                index: progressIndex,
+                progress: frameProgress,
+                status: "Capturing frame \(index + 1) of \(totalFrames)..."
+            )
             
             let cgImage = try generator.copyCGImage(at: time, actualTime: nil)
             let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
@@ -296,9 +403,7 @@ struct ContentView: View {
             images.append((nsImage, timestamp))
         }
         
-        await MainActor.run {
-            statusMessage = "Compositing grid..."
-        }
+        await updateProgress(index: progressIndex, progress: 0.85, status: "Compositing grid...")
         
         // Create grid image with borders and title
         let thumbnailWidth = 400
@@ -365,6 +470,8 @@ struct ContentView: View {
         
         gridImage.unlockFocus()
         
+        await updateProgress(index: progressIndex, progress: 0.95, status: "Saving file...")
+        
         // Save to same folder as video file with clean filename
         let videoDirectory = videoURL.deletingLastPathComponent()
         let baseFilename = videoURL.deletingPathExtension().lastPathComponent
@@ -384,6 +491,8 @@ struct ContentView: View {
            let jpegData = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.9]) {
             try jpegData.write(to: outputURL)
         }
+        
+        await updateProgress(index: progressIndex, progress: 1.0, status: "Complete!")
         
         return outputURL
     }
