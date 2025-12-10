@@ -13,11 +13,49 @@ struct ContentView: View {
                     .font(.title)
                     .padding(.top)
                 
-                // File selection
-                fileSelectionView
+                // INPUT SECTION
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Input")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                    
+                    fileSelectionView
+                }
                 
-                // Settings
-                settingsView
+                Divider()
+                
+                // OUTPUT SECTION
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Output")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                    
+                    outputFolderView
+                }
+                
+                Divider()
+                
+                // GRID SECTION
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Grid")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                    
+                    gridSettingsView
+                }
+                
+                Divider()
+                
+                // OPTIONS SECTION
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Options")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                    
+                    optionsView
+                }
+                
+                Divider()
                 
                 // Action buttons
                 actionButtonsView
@@ -42,7 +80,7 @@ struct ContentView: View {
                         Button("Clear Completed") {
                             viewModel.clearCompleted()
                         }
-                        .buttonStyle(BorderlessButtonStyle())
+                        .buttonStyle(.borderless)
                         .font(.caption)
                     }
                 }
@@ -59,7 +97,7 @@ struct ContentView: View {
                     VStack(spacing: 8) {
                         Image(systemName: "photo.stack")
                             .font(.system(size: 48))
-                            .foregroundColor(.secondary.opacity(0.5))
+                            .foregroundColor(.accentColor.opacity(0.5))
                         Text("No videos selected")
                             .foregroundColor(.secondary)
                     }
@@ -96,7 +134,7 @@ struct ContentView: View {
     // MARK: - Subviews
     
     private var fileSelectionView: some View {
-        VStack {
+        VStack(spacing: 8) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     if viewModel.videoJobs.isEmpty {
@@ -123,8 +161,19 @@ struct ContentView: View {
                 .background(Color.gray.opacity(0.1))
                 .cornerRadius(5)
                 
-                Button("Choose Files") {
-                    selectVideoFiles()
+                VStack(spacing: 8) {
+                    Button("Choose Files") {
+                        selectVideoFiles()
+                    }
+                    .buttonStyle(.bordered)
+                    
+                    if !viewModel.videoJobs.isEmpty {
+                        Button("Clear All") {
+                            viewModel.clearAll()
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundColor(.secondary)
+                    }
                 }
             }
             
@@ -136,11 +185,11 @@ struct ContentView: View {
                 .background(
                     RoundedRectangle(cornerRadius: 10)
                         .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [5]))
-                        .foregroundColor(isDragOver ? .blue : .gray.opacity(0.5))
+                        .foregroundColor(isDragOver ? .accentColor : .gray.opacity(0.5))
                 )
                 .background(
                     RoundedRectangle(cornerRadius: 10)
-                        .fill(isDragOver ? Color.blue.opacity(0.1) : Color.clear)
+                        .fill(isDragOver ? Color.accentColor.opacity(0.1) : Color.clear)
                 )
                 .overlay(
                     DropView(isDragOver: $isDragOver) { urls in
@@ -148,7 +197,93 @@ struct ContentView: View {
                     }
                 )
         }
-        .padding(.horizontal)
+    }
+    
+    private var outputFolderView: some View {
+        HStack(spacing: 12) {
+            if let folder = viewModel.outputFolderURL {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(folder.lastPathComponent)
+                        .font(.subheadline)
+                    Text(folder.path)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(Color.accentColor.opacity(0.1))
+                .cornerRadius(5)
+                
+                Button("Change") {
+                    viewModel.selectOutputFolder()
+                }
+                .buttonStyle(.bordered)
+                
+                Button("Clear") {
+                    viewModel.clearOutputFolder()
+                }
+                .buttonStyle(.borderless)
+            } else {
+                Text("Same as video (or Downloads if no permission)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                
+                Button("Set Output Folder") {
+                    viewModel.selectOutputFolder()
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+    
+    private var gridSettingsView: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 20) {
+                Stepper("\(viewModel.columns) columns", value: $viewModel.columns, in: 1...10)
+                    .frame(width: 150)
+                
+                Stepper("\(viewModel.rows) rows", value: $viewModel.rows, in: 1...10)
+                    .frame(width: 150)
+            }
+            
+            Picker("Output Width", selection: $viewModel.targetWidth) {
+                Text("1920px").tag(1920)
+                Text("2560px").tag(2560)
+                Text("3000px").tag(3000)
+                Text("3840px (4K)").tag(3840)
+            }
+            .pickerStyle(SegmentedPickerStyle())
+        }
+    }
+    
+    private var optionsView: some View {
+        VStack(spacing: 12) {
+            Picker("Aspect", selection: $viewModel.aspectMode) {
+                ForEach(AspectMode.allCases, id: \.rawValue) { mode in
+                    Text(mode.rawValue).tag(mode.rawValue)
+                }
+            }
+            .pickerStyle(SegmentedPickerStyle())
+            
+            Picker("Background", selection: $viewModel.backgroundTheme) {
+                ForEach(BackgroundTheme.allCases, id: \.rawValue) { theme in
+                    Text(theme.rawValue).tag(theme.rawValue)
+                }
+            }
+            .pickerStyle(SegmentedPickerStyle())
+            
+            HStack {
+                Toggle("Show Timestamps", isOn: $viewModel.showTimestamps)
+                
+                Spacer()
+                
+                Stepper("Process \(viewModel.maxConcurrent) at once", value: $viewModel.maxConcurrent, in: 1...10)
+                    .frame(width: 220)
+            }
+        }
     }
     
     private var settingsView: some View {
@@ -268,19 +403,13 @@ struct ContentView: View {
                 viewModel.generateGrids()
             }
             .disabled(viewModel.videoJobs.isEmpty || viewModel.isProcessing)
-            .padding()
-            .background(viewModel.videoJobs.isEmpty || viewModel.isProcessing ? Color.gray : Color.blue)
-            .foregroundColor(.white)
-            .cornerRadius(8)
+            .buttonStyle(.borderedProminent)
             
             if viewModel.isProcessing {
                 Button("Cancel") {
                     viewModel.cancelGeneration()
                 }
-                .padding()
-                .background(Color.red)
-                .foregroundColor(.white)
-                .cornerRadius(8)
+                .buttonStyle(.bordered)
             }
         }
     }

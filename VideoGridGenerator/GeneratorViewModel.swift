@@ -346,6 +346,20 @@ class GeneratorViewModel: ObservableObject {
         completedCount = 0
         lastOutputPath = nil
     }
+    
+    func clearAll() {
+        // Release security access for all jobs
+        for (_, job) in videoJobs {
+            if job.hasSecurityAccess {
+                job.url.stopAccessingSecurityScopedResource()
+            }
+        }
+        
+        videoJobs.removeAll()
+        jobOrder.removeAll()
+        completedCount = 0
+        lastOutputPath = nil
+    }
 }
 
 // MARK: - AsyncSemaphore (Cancellation-aware)
