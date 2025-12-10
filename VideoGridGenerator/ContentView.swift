@@ -85,15 +85,55 @@ struct ContentView: View {
                     RoundedRectangle(cornerRadius: 10)
                         .fill(isDragOver ? Color.blue.opacity(0.1) : Color.clear)
                 )
-                .onDrop(of: [.fileURL], isTargeted: $isDragOver) { providers in
-                    handleDrop(providers: providers)
-                }
+                .overlay(
+                    DropView(isDragOver: $isDragOver) { urls in
+                        viewModel.handleDroppedURLs(urls)
+                    }
+                )
         }
         .padding(.horizontal)
     }
     
     private var settingsView: some View {
         VStack(spacing: 16) {
+            // Output folder selection
+            HStack(spacing: 20) {
+                Text("Output Folder:")
+                    .frame(width: 100, alignment: .trailing)
+                
+                if let folder = viewModel.outputFolderURL {
+                    Text(folder.path)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(6)
+                        .background(Color.blue.opacity(0.1))
+                        .cornerRadius(5)
+                    
+                    Button("Change") {
+                        viewModel.selectOutputFolder()
+                    }
+                    .buttonStyle(BorderlessButtonStyle())
+                    
+                    Button("Clear") {
+                        viewModel.clearOutputFolder()
+                    }
+                    .buttonStyle(BorderlessButtonStyle())
+                } else {
+                    Text("Same as video (or Downloads if no permission)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    
+                    Button("Set Output Folder") {
+                        viewModel.selectOutputFolder()
+                    }
+                }
+            }
+            
+            Divider()
+            
             // Grid size
             HStack(spacing: 20) {
                 Text("Grid Size:")
@@ -314,32 +354,6 @@ struct ContentView: View {
     
     // MARK: - Actions
     
-    private func handleDrop(providers: [NSItemProvider]) -> Bool {
-        Task {
-            var urls: [URL] = []
-            
-            for provider in providers {
-                if let url = await loadURL(from: provider) {
-                    urls.append(url)
-                }
-            }
-            
-            await MainActor.run {
-                viewModel.handleDroppedURLs(urls)
-            }
-        }
-        
-        return true
-    }
-    
-    private func loadURL(from provider: NSItemProvider) async -> URL? {
-        await withCheckedContinuation { continuation in
-            _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                continuation.resume(returning: url)
-            }
-        }
-    }
-    
     private func selectVideoFiles() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.mpeg4Movie, .quickTimeMovie]
@@ -348,8 +362,43 @@ struct ContentView: View {
         panel.canChooseFiles = true
         panel.message = "Select video files or folders"
         
+        // Request read/write access
+        panel.canCreateDirectories = false
+        
         if panel.runModal() == .OK {
-            viewModel.handleDroppedURLs(panel.urls)
+            // Store security-scoped bookmarks for write access
+            var urlsWithAccess: [URL] = []
+            
+            for url in panel.urls {
+                // For files, we need the parent directory bookmark
+                let bookmarkURL = url.hasDirectoryPath ? url : url.deletingLastPathComponent()
+                
+                do {
+                    // Create security-scoped bookmark
+                    let bookmarkData = try bookmarkURL.bookmarkData(
+                        options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess],
+                        includingResourceValuesForKeys: nil,
+                        relativeTo: nil
+                    )
+                    
+                    // Resolve bookmark to maintain access
+                    var isStale = false
+                    let resolvedURL = try URL(
+                        resolvingBookmarkData: bookmarkData,
+                        options: .withSecurityScope,
+                        relativeTo: nil,
+                        bookmarkDataIsStale: &isStale
+                    )
+                    
+                    _ = resolvedURL.startAccessingSecurityScopedResource()
+                    urlsWithAccess.append(url)
+                } catch {
+                    print("⚠️ Could not create bookmark for \(bookmarkURL.path): \(error)")
+                    urlsWithAccess.append(url)
+                }
+            }
+            
+            viewModel.handleDroppedURLs(urlsWithAccess)
         }
     }
 }

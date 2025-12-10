@@ -11,7 +11,8 @@ struct GridConfig {
 }
 
 class GridComposer {
-    func composeGrid(frames: [ExtractedFrame], sourceURL: URL, config: GridConfig) async throws -> URL {
+    func composeGrid(frames: [ExtractedFrame], sourceURL: URL, config: GridConfig, outputFolder: URL? = nil) async throws -> URL {
+        
         let borderWidth = 2
         let framePadding = 8
         let titleHeight = 80
@@ -99,10 +100,31 @@ class GridComposer {
         // Save file
         let outputURL = try resolveOutputURL(for: sourceURL, config: config)
         
+        print("🎨 Grid image composed, size: \(gridWidth)×\(gridHeight)")
+        
         if let tiffData = gridImage.tiffRepresentation,
            let bitmap = NSBitmapImageRep(data: tiffData),
            let jpegData = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.92]) {
-            try jpegData.write(to: outputURL)
+            
+            print("📦 JPEG data generated, size: \(jpegData.count) bytes")
+            
+            do {
+                try jpegData.write(to: outputURL)
+                print("✅ Successfully wrote file to: \(outputURL.path)")
+                
+                // Verify file exists
+                if FileManager.default.fileExists(atPath: outputURL.path) {
+                    print("✅ Verified: File exists at \(outputURL.path)")
+                } else {
+                    print("❌ ERROR: File does not exist after writing!")
+                }
+            } catch {
+                print("❌ ERROR writing file: \(error)")
+                throw error
+            }
+        } else {
+            print("❌ ERROR: Failed to generate JPEG data")
+            throw NSError(domain: "GridComposer", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to generate JPEG"])
         }
         
         return outputURL
@@ -132,19 +154,63 @@ class GridComposer {
     }
     
     private func resolveOutputURL(for videoURL: URL, config: GridConfig) throws -> URL {
-        let videoDirectory = videoURL.deletingLastPathComponent()
         let baseFilename = videoURL.deletingPathExtension().lastPathComponent
         let outputFilename = "\(baseFilename)_\(config.rows)x\(config.columns).jpg"
+        
+        // Try to write to same directory as video
+        let videoDirectory = videoURL.deletingLastPathComponent()
         var outputURL = videoDirectory.appendingPathComponent(outputFilename)
         
-        var counter = 1
-        while FileManager.default.fileExists(atPath: outputURL.path) {
-            let numberedFilename = "\(baseFilename)_\(config.rows)x\(config.columns)_\(counter).jpg"
-            outputURL = videoDirectory.appendingPathComponent(numberedFilename)
-            counter += 1
+        // Test if we can write to this directory
+        let testURL = videoDirectory.appendingPathComponent(".test_write_\(UUID().uuidString)")
+        do {
+            try "test".write(to: testURL, atomically: true, encoding: .utf8)
+            try? FileManager.default.removeItem(at: testURL)
+            
+            // We can write here, proceed with collision checking
+            var counter = 1
+            while FileManager.default.fileExists(atPath: outputURL.path) {
+                let numberedFilename = "\(baseFilename)_\(config.rows)x\(config.columns)_\(counter).jpg"
+                outputURL = videoDirectory.appendingPathComponent(numberedFilename)
+                counter += 1
+            }
+            
+            print("✅ Will write to: \(outputURL.path)")
+            return outputURL
+            
+        } catch {
+            // Can't write to video directory, use user's actual Downloads folder
+            print("⚠️ Cannot write to video directory: \(error)")
+            print("⚠️ Saving to your Downloads folder instead")
+            
+            // Get the real Downloads folder (not sandboxed)
+            let homeURL = FileManager.default.homeDirectoryForCurrentUser
+            let downloadsURL = homeURL.appendingPathComponent("Downloads")
+            
+            // Verify Downloads exists and is accessible
+            var isDir: ObjCBool = false
+            if !FileManager.default.fileExists(atPath: downloadsURL.path, isDirectory: &isDir) || !isDir.boolValue {
+                print("⚠️ Downloads folder not accessible, using fallback")
+                let fallbackURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+                outputURL = fallbackURL.appendingPathComponent(outputFilename)
+            } else {
+                outputURL = downloadsURL.appendingPathComponent(outputFilename)
+            }
+            
+            var counter = 1
+            while FileManager.default.fileExists(atPath: outputURL.path) {
+                let numberedFilename = "\(baseFilename)_\(config.rows)x\(config.columns)_\(counter).jpg"
+                if outputURL.path.contains("/Downloads/") {
+                    outputURL = downloadsURL.appendingPathComponent(numberedFilename)
+                } else {
+                    outputURL = outputURL.deletingLastPathComponent().appendingPathComponent(numberedFilename)
+                }
+                counter += 1
+            }
+            
+            print("✅ Will write to Downloads: \(outputURL.path)")
+            return outputURL
         }
-        
-        return outputURL
     }
     
     private func formatTimestamp(_ seconds: Double) -> String {
