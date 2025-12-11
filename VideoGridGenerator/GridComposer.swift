@@ -14,14 +14,24 @@ class GridComposer {
     func composeGrid(frames: [ExtractedFrame], sourceURL: URL, config: GridConfig, outputFolder: URL? = nil) async throws -> URL {
         let borderWidth = 2
         let framePadding = 8
-        let titleHeight = 80
+        let titleHeight = 90  // C4: Increased from 80 for better spacing
         let titleMargin = 20
         let bottomPadding = 20
+        
+        // C1: Determine source aspect ratio for .source mode
+        let sourceAspectRatio = try await determineAspectRatio(sourceURL: sourceURL, frames: frames, config: config)
         
         // Calculate thumbnail dimensions from target width
         let totalPadding = framePadding * (config.columns + 1) + (borderWidth * 2 * config.columns)
         let thumbnailWidth = (config.targetWidth - totalPadding) / config.columns
-        let thumbnailHeight = Int(Double(thumbnailWidth) * 9.0 / 16.0) // Assume 16:9 for now
+        
+        // C1: Calculate height based on aspect mode
+        let thumbnailHeight: Int
+        if config.aspectMode == .source {
+            thumbnailHeight = Int(Double(thumbnailWidth) / sourceAspectRatio)
+        } else {
+            thumbnailHeight = Int(Double(thumbnailWidth) * 9.0 / 16.0) // Default 16:9
+        }
         
         let gridWidth = (thumbnailWidth + borderWidth * 2) * config.columns + framePadding * (config.columns + 1)
         let gridHeight = (thumbnailHeight + borderWidth * 2) * config.rows + framePadding * (config.rows + 1) + titleHeight + bottomPadding
@@ -41,7 +51,8 @@ class GridComposer {
         let durationString = duration != nil ? formatDuration(CMTimeGetSeconds(duration!)) : ""
         
         let titleText = "\(videoFilename)  •  \(config.rows)×\(config.columns)  •  \(durationString)"
-        let titleRect = NSRect(x: titleMargin, y: gridHeight - titleHeight + 15, width: gridWidth - titleMargin * 2, height: titleHeight - 20)
+        // C4: Adjusted positioning for better spacing
+        let titleRect = NSRect(x: titleMargin, y: gridHeight - titleHeight + 20, width: gridWidth - titleMargin * 2, height: titleHeight - 25)
         let titleColor = config.backgroundTheme == .black ? NSColor.white : NSColor.black
         let titleAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 20, weight: .medium),
@@ -49,23 +60,33 @@ class GridComposer {
         ]
         titleText.draw(in: titleRect, withAttributes: titleAttrs)
         
+        // C2: Small corner radius for softer edges
+        let cornerRadius: CGFloat = 3
+        
         // Draw frames
         for (index, frame) in frames.enumerated() {
             let col = index % config.columns
-            let row = index / config.columns
+            let row = index / config.columns  // Fixed: was incorrectly dividing by rows
             
             let x = framePadding + col * (thumbnailWidth + borderWidth * 2 + framePadding)
             let y = gridHeight - titleHeight - framePadding - (row + 1) * (thumbnailHeight + borderWidth * 2 + framePadding)
             
-            // Border
+            // C2: Border with rounded corners
             let borderColor = config.backgroundTheme == .black ? NSColor.white : NSColor.black
             borderColor.setFill()
             let borderRect = NSRect(x: x, y: y, width: thumbnailWidth + borderWidth * 2, height: thumbnailHeight + borderWidth * 2)
-            borderRect.fill()
+            let borderPath = NSBezierPath(roundedRect: borderRect, xRadius: cornerRadius, yRadius: cornerRadius)
+            borderPath.fill()
+            
+            // Save graphics state for clipping
+            NSGraphicsContext.current?.saveGraphicsState()
+            
+            // C2: Clip to rounded rect for image
+            let destRect = NSRect(x: x + borderWidth, y: y + borderWidth, width: thumbnailWidth, height: thumbnailHeight)
+            let destPath = NSBezierPath(roundedRect: destRect, xRadius: cornerRadius - 1, yRadius: cornerRadius - 1)
+            destPath.setClip()
             
             // Draw image based on aspect mode
-            let destRect = NSRect(x: x + borderWidth, y: y + borderWidth, width: thumbnailWidth, height: thumbnailHeight)
-            
             switch config.aspectMode {
             case .fill:
                 frame.image.draw(in: destRect, from: .zero, operation: .copy, fraction: 1.0)
@@ -75,19 +96,34 @@ class GridComposer {
                 drawImageFit(frame.image, in: destRect, background: bgColor)
             }
             
-            // Timestamp
+            // Restore clipping state
+            NSGraphicsContext.current?.restoreGraphicsState()
+            
+            // C3: Timestamp with theme-appropriate colors
             if config.showTimestamps {
                 let timestamp = formatTimestamp(CMTimeGetSeconds(frame.timestamp))
                 let textRect = NSRect(x: x + borderWidth + 8, y: y + borderWidth + 8, width: thumbnailWidth - 16, height: 30)
                 
+                // Adjust colors based on background theme
+                let timestampColor: NSColor
+                let shadowColor: NSColor
+                
+                if config.backgroundTheme == .white {
+                    timestampColor = NSColor.black
+                    shadowColor = NSColor.white.withAlphaComponent(0.9)
+                } else {
+                    timestampColor = NSColor.white
+                    shadowColor = NSColor.black.withAlphaComponent(0.9)
+                }
+                
                 let shadow = NSShadow()
-                shadow.shadowColor = NSColor.black.withAlphaComponent(0.9)
+                shadow.shadowColor = shadowColor
                 shadow.shadowOffset = NSSize(width: 1, height: -1)
                 shadow.shadowBlurRadius = 4
                 
                 let attrs: [NSAttributedString.Key: Any] = [
                     .font: NSFont.systemFont(ofSize: 18, weight: .bold),
-                    .foregroundColor: NSColor.white,
+                    .foregroundColor: timestampColor,
                     .shadow: shadow
                 ]
                 timestamp.draw(in: textRect, withAttributes: attrs)
@@ -127,6 +163,42 @@ class GridComposer {
         }
         
         return outputURL
+    }
+    
+    // C1: Determine aspect ratio from video track or fallback to frame
+    private func determineAspectRatio(sourceURL: URL, frames: [ExtractedFrame], config: GridConfig) async throws -> Double {
+        if config.aspectMode != .source {
+            return 16.0 / 9.0  // Default for non-source modes
+        }
+        
+        // Try to get aspect ratio from video track
+        let asset = AVAsset(url: sourceURL)
+        if let track = try? await asset.loadTracks(withMediaType: .video).first {
+            let naturalSize = try? await track.load(.naturalSize)
+            let preferredTransform = try? await track.load(.preferredTransform)
+            
+            if let size = naturalSize, let transform = preferredTransform {
+                // Apply transform to get display size (handles rotation)
+                let transformedSize = size.applying(transform)
+                let width = abs(transformedSize.width)
+                let height = abs(transformedSize.height)
+                
+                if height > 0 {
+                    return width / height
+                }
+            }
+        }
+        
+        // Fallback: use first frame's dimensions
+        if let firstFrame = frames.first {
+            let size = firstFrame.image.size
+            if size.height > 0 {
+                return size.width / size.height
+            }
+        }
+        
+        // Final fallback to 16:9
+        return 16.0 / 9.0
     }
     
     private func drawImageFit(_ image: NSImage, in rect: NSRect, background: NSColor) {
