@@ -60,8 +60,8 @@ struct ContentView: View {
                 // Action buttons
                 actionButtonsView
                 
-                // Last output
-                if let lastOutput = viewModel.lastOutputPath {
+                // Last output - only show when not processing and has output
+                if !viewModel.isProcessing, let lastOutput = viewModel.lastOutputPath {
                     lastOutputView(lastOutput)
                 }
                 
@@ -442,7 +442,7 @@ struct ContentView: View {
     private func jobProgressView(_ job: VideoJob) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(job.url.lastPathComponent)
+                Text(truncateFilename(job.url.lastPathComponent, maxLength: 45))
                     .font(.caption)
                     .lineLimit(1)
                 Spacer()
@@ -466,7 +466,7 @@ struct ContentView: View {
     private func completedJobView(_ job: VideoJob) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(job.url.lastPathComponent)
+                Text(truncateFilename(job.url.lastPathComponent, maxLength: 45))
                     .font(.caption)
                     .lineLimit(1)
                 Spacer()
@@ -483,11 +483,10 @@ struct ContentView: View {
             
             if let outputPath = job.outputPath {
                 HStack {
-                    Text(outputPath)
+                    Text(truncatePath(outputPath))
                         .font(.caption2)
                         .foregroundColor(.secondary)
                         .lineLimit(1)
-                        .truncationMode(.middle)
                     
                     Button("Reveal") {
                         NSWorkspace.shared.selectFile(outputPath, inFileViewerRootedAtPath: "")
@@ -500,6 +499,33 @@ struct ContentView: View {
         .padding(8)
         .background(Color.green.opacity(0.05))
         .cornerRadius(5)
+    }
+    
+    // Helper function to truncate filenames intelligently
+    private func truncateFilename(_ filename: String, maxLength: Int) -> String {
+        if filename.count <= maxLength {
+            return filename
+        }
+        
+        // Try to preserve extension
+        let components = filename.split(separator: ".")
+        if components.count > 1, let ext = components.last {
+            let nameWithoutExt = components.dropLast().joined(separator: ".")
+            let truncated = String(nameWithoutExt.prefix(maxLength - Int(ext.count) - 4)) + "..."
+            return truncated + ".\(ext)"
+        }
+        
+        return String(filename.prefix(maxLength - 3)) + "..."
+    }
+    
+    // Helper function to truncate paths to ~/folder/file format
+    private func truncatePath(_ path: String) -> String {
+        let url = URL(fileURLWithPath: path)
+        let filename = url.lastPathComponent
+        let parentFolder = url.deletingLastPathComponent().lastPathComponent
+        
+        // Show as ~/ParentFolder/filename.jpg
+        return "~/\(parentFolder)/\(filename)"
     }
     
     // MARK: - Actions

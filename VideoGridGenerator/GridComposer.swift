@@ -44,13 +44,22 @@ class GridComposer {
         bgColor.setFill()
         NSRect(x: 0, y: 0, width: gridWidth, height: gridHeight).fill()
         
-        // Draw filename and metadata
+        // Draw filename and metadata with background strip
         let videoFilename = sourceURL.lastPathComponent
         let asset = AVAsset(url: sourceURL)
         let duration = try? await asset.load(.duration)
         let durationString = duration != nil ? formatDuration(CMTimeGetSeconds(duration!)) : ""
         
         let titleText = "\(videoFilename)  •  \(config.rows)×\(config.columns)  •  \(durationString)"
+        
+        // Draw semi-transparent background strip for title
+        let titleBgRect = NSRect(x: 0, y: gridHeight - titleHeight, width: gridWidth, height: titleHeight)
+        let titleBgColor = config.backgroundTheme == .black
+            ? NSColor.black.withAlphaComponent(0.3)
+            : NSColor.white.withAlphaComponent(0.3)
+        titleBgColor.setFill()
+        titleBgRect.fill()
+        
         // C4: Adjusted positioning for better spacing
         let titleRect = NSRect(x: titleMargin, y: gridHeight - titleHeight + 20, width: gridWidth - titleMargin * 2, height: titleHeight - 25)
         let titleColor = config.backgroundTheme == .black ? NSColor.white : NSColor.black
@@ -99,10 +108,11 @@ class GridComposer {
             // Restore clipping state
             NSGraphicsContext.current?.restoreGraphicsState()
             
-            // C3: Timestamp with theme-appropriate colors
+            // C3: Timestamp with theme-appropriate colors and better padding
             if config.showTimestamps {
                 let timestamp = formatTimestamp(CMTimeGetSeconds(frame.timestamp))
-                let textRect = NSRect(x: x + borderWidth + 8, y: y + borderWidth + 8, width: thumbnailWidth - 16, height: 30)
+                // Increased padding from 8 to 10px for better spacing
+                let textRect = NSRect(x: x + borderWidth + 10, y: y + borderWidth + 10, width: thumbnailWidth - 20, height: 30)
                 
                 // Adjust colors based on background theme
                 let timestampColor: NSColor
