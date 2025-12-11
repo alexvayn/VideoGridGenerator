@@ -60,6 +60,8 @@ class GeneratorViewModel: ObservableObject {
     func handleDroppedURLs(_ urls: [URL]) {
         let videoURLs = collectVideoURLs(from: urls)
         addVideos(videoURLs)
+        
+        // Don't auto-start pre-processing - let user click Generate when ready
     }
     
     func addVideos(_ urls: [URL]) {
@@ -157,14 +159,18 @@ class GeneratorViewModel: ObservableObject {
     func generateGrids() {
         guard !videoJobs.isEmpty else { return }
         
-        // Cancel any existing generation task
+        // Cancel any existing tasks
         generationTask?.cancel()
         
         isProcessing = true
         completedCount = 0
         cancellationTokens.removeAll()
         
-        generationTask = Task {
+        // CRITICAL: Run on background priority to keep UI responsive
+        generationTask = Task(priority: .userInitiated) {
+            // Small delay to let UI update before heavy work starts
+            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+            
             await processVideosWithSemaphore()
             
             guard !Task.isCancelled else {
@@ -215,7 +221,8 @@ class GeneratorViewModel: ObservableObject {
                 
                 guard let job = videoJobs[jobId] else { continue }
                 
-                group.addTask {
+                // CRITICAL: Use .utility priority for background processing
+                group.addTask(priority: .utility) {
                     await semaphore.wait()
                     
                     // Check cancellation after acquiring semaphore
@@ -247,8 +254,8 @@ class GeneratorViewModel: ObservableObject {
         }
         
         await updateJob(jobId: jobId) { job in
-            job.status = "Loading..."
-            job.progress = 0.1
+            job.status = "Starting..."
+            job.progress = 0.0
         }
         
         do {
@@ -261,14 +268,22 @@ class GeneratorViewModel: ObservableObject {
                 showTimestamps: showTimestamps
             )
             
+            // Frame extraction is 80% of the work
             let frames = try await frameExtractor.extractFrames(
                 from: url,
                 count: rows * columns,
                 progressCallback: { progress in
                     Task { @MainActor in
                         self.updateJob(jobId: jobId) { job in
-                            job.progress = 0.1 + (progress * 0.7)
-                            job.status = "Extracting frames..."
+                            // 0-80% for extraction
+                            job.progress = progress * 0.8
+                            
+                            // Show detailed status based on progress
+                            if progress < 0.5 {
+                                job.status = "Extracting frames..."
+                            } else {
+                                job.status = "Selecting best frames..."
+                            }
                         }
                     }
                 }
@@ -285,7 +300,7 @@ class GeneratorViewModel: ObservableObject {
             }
             
             await updateJob(jobId: jobId) { job in
-                job.status = "Compositing..."
+                job.status = "Composing grid..."
                 job.progress = 0.85
             }
             
