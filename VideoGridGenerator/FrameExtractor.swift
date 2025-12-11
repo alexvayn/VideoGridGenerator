@@ -168,7 +168,7 @@ class FrameExtractor {
         // Extract candidate frames
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 200, height: 200)
+        generator.maximumSize = CGSize(width: 480, height: 480)  // Increased for better quality
         generator.requestedTimeToleranceBefore = CMTime(seconds: 0.1, preferredTimescale: 600)
         generator.requestedTimeToleranceAfter = CMTime(seconds: 0.1, preferredTimescale: 600)
         
