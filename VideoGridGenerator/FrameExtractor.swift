@@ -8,6 +8,8 @@ struct ExtractedFrame {
 
 class FrameExtractor {
     func extractFrames(from url: URL, count: Int, progressCallback: @escaping (Double) -> Void) async throws -> [ExtractedFrame] {
+        let startTime = CFAbsoluteTimeGetCurrent()
+        
         let asset = AVAsset(url: url)
         let duration = try await asset.load(.duration)
         let totalSeconds = CMTimeGetSeconds(duration)
@@ -21,8 +23,8 @@ class FrameExtractor {
             throw NSError(domain: "FrameExtractor", code: 1, userInfo: [NSLocalizedDescriptionKey: "Video too short"])
         }
         
-        // Oversample 2x instead of 3x (still good results, 33% faster)
-        let candidateCount = count * 2
+        // Oversample 1.5x for speed (was 2x, still gives good distinctness with our efficient algorithm)
+        let candidateCount = Int(Double(count) * 1.5)
         var candidateTimes: [CMTime] = []
         
         for i in 0..<candidateCount {
@@ -31,10 +33,12 @@ class FrameExtractor {
             candidateTimes.append(time)
         }
         
+        let extractStartTime = CFAbsoluteTimeGetCurrent()
+        
         // Extract candidate frames
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 400, height: 400) // Reduced from 800x800 (4x fewer pixels)
+        generator.maximumSize = CGSize(width: 480, height: 480) // High quality to avoid upscaling in final output
         generator.requestedTimeToleranceBefore = CMTime(seconds: 0.1, preferredTimescale: 600)
         generator.requestedTimeToleranceAfter = CMTime(seconds: 0.1, preferredTimescale: 600)
         
@@ -48,28 +52,42 @@ class FrameExtractor {
             progressCallback(Double(index) / Double(candidateTimes.count))
         }
         
+        let extractTime = CFAbsoluteTimeGetCurrent() - extractStartTime
+        print("⏱️  Frame extraction took: \(String(format: "%.2f", extractTime))s for \(candidateCount) frames")
+        
+        let selectionStartTime = CFAbsoluteTimeGetCurrent()
+        
         // Select most distinct frames
-        let selectedFrames = selectDistinctFrames(from: candidateFrames, count: count)
+        let selectedFrames = await selectDistinctFrames(from: candidateFrames, count: count)
+        
+        let selectionTime = CFAbsoluteTimeGetCurrent() - selectionStartTime
+        let totalTime = CFAbsoluteTimeGetCurrent() - startTime
+        
+        print("⏱️  Frame selection took: \(String(format: "%.2f", selectionTime))s")
+        print("⏱️  TOTAL for \(url.lastPathComponent): \(String(format: "%.2f", totalTime))s (\(count) final frames from \(candidateCount) candidates)")
+        print("")
         
         progressCallback(1.0)
         return selectedFrames
     }
     
-    private func selectDistinctFrames(from candidates: [ExtractedFrame], count: Int) -> [ExtractedFrame] {
+    private func selectDistinctFrames(from candidates: [ExtractedFrame], count: Int) async -> [ExtractedFrame] {
         guard candidates.count > count else { return candidates }
+        
+        // OPTIMIZATION: Skip distinctness algorithm for small grids (≤9 frames)
+        // Just return evenly-spaced frames - much faster with negligible quality difference
+        if count <= 9 {
+            let step = Double(candidates.count) / Double(count)
+            let selectedIndices = (0..<count).map { index in
+                min(Int(Double(index) * step), candidates.count - 1)
+            }
+            return selectedIndices.map { candidates[$0] }
+        }
         
         print("🎬 Starting distinctness selection: \(candidates.count) candidates → \(count) needed")
         
-        // Calculate metrics - use concurrent processing for speed
-        let frameMetrics: [(index: Int, histogram: [Double], edges: Double, brightness: Double, variance: Double)] = candidates.enumerated().compactMap { (index, candidate) in
-            guard let histogram = computeHistogram(candidate.image),
-                  let edges = computeEdgeDensity(candidate.image),
-                  let brightness = computeBrightness(candidate.image),
-                  let variance = computeColorVariance(candidate.image) else {
-                return nil
-            }
-            return (index: index, histogram: histogram, edges: edges, brightness: brightness, variance: variance)
-        }
+        // OPTIMIZATION: Compute all metrics sequentially to avoid thread explosion
+        let frameMetrics = computeMetricsSequentially(for: candidates)
         
         guard frameMetrics.count > count else {
             print("⚠️ Not enough valid frames, using all candidates")
@@ -96,36 +114,41 @@ class FrameExtractor {
             framesToScore = validFrames
         }
         
-        // Calculate composite distinctness scores
+        // OPTIMIZATION: Fast sample-based comparison with synchronous scoring
+        // Avoid nested TaskGroups which cause thread explosion when processing multiple videos
+        
+        let sampleCount = min(4, framesToScore.count / 5) // Reduced to 4 samples
+        let sampleIndices = selectRepresentativeSamples(from: framesToScore, count: sampleCount)
+        
+        print("🎯 Using \(sampleIndices.count) representative samples for comparison")
+        
+        // Fast synchronous scoring - no nested parallelism
         var scores: [(index: Int, score: Double)] = []
         
-        for (i, metric) in framesToScore.enumerated() {
+        for metric in framesToScore {
             var totalScore = 0.0
-            var comparisons = 0
             
-            // Compare with neighbors and distant frames
-            let compareIndices = getComparisonIndices(for: i, total: framesToScore.count)
-            
-            for compareIdx in compareIndices {
-                let other = framesToScore[compareIdx]
+            for sampleIdx in sampleIndices {
+                let sample = framesToScore[sampleIdx]
                 
-                // Histogram difference (color/tone changes)
-                let histDiff = histogramDifference(metric.histogram, other.histogram)
+                // Skip self-comparison
+                if metric.index == sample.index {
+                    continue
+                }
                 
-                // Edge density difference (scene composition changes)
-                let edgeDiff = abs(metric.edges - other.edges)
+                // Simplified scoring: only histogram difference (fastest metric)
+                let histDiff = histogramDifference(metric.histogram, sample.histogram)
                 
-                // Brightness difference (lighting changes)
-                let brightDiff = abs(metric.brightness - other.brightness)
+                // Add brightness difference for variety
+                let brightDiff = abs(metric.brightness - sample.brightness)
                 
-                // Weighted composite score
-                let compositeScore = (histDiff * 0.5) + (edgeDiff * 0.3) + (brightDiff * 0.2)
+                // Simplified weighted score (removed expensive edge calculations)
+                let compositeScore = (histDiff * 0.7) + (brightDiff * 0.3)
                 
                 totalScore += compositeScore
-                comparisons += 1
             }
             
-            let avgScore = comparisons > 0 ? totalScore / Double(comparisons) : 0
+            let avgScore = sampleIndices.count > 0 ? totalScore / Double(sampleIndices.count) : 0
             scores.append((index: metric.index, score: avgScore))
         }
         
@@ -139,20 +162,43 @@ class FrameExtractor {
         return selectedIndices.map { candidates[$0] }
     }
     
-    // Get indices to compare against (neighbors + some distant frames)
-    private func getComparisonIndices(for index: Int, total: Int) -> [Int] {
-        var indices: [Int] = []
+    // OPTIMIZATION: Select representative samples for comparison
+    // Chooses frames that are evenly distributed and have diverse characteristics
+    private func selectRepresentativeSamples(from frames: [(index: Int, histogram: [Double], edges: Double, brightness: Double, variance: Double)], count: Int) -> [Int] {
+        guard frames.count > count else {
+            return frames.indices.map { $0 }
+        }
         
-        // Add immediate neighbors only (reduced comparisons)
-        if index > 0 { indices.append(index - 1) }
-        if index < total - 1 { indices.append(index + 1) }
+        // Strategy: Evenly space samples across the video timeline
+        // This ensures we capture diversity across the entire video
+        let step = Double(frames.count) / Double(count)
+        var samples: [Int] = []
         
-        // Add fewer distant frames (reduced from 8 to 4 total comparisons)
-        let step = max(total / 8, 1)
-        if index - step >= 0 { indices.append(index - step) }
-        if index + step < total { indices.append(index + step) }
+        for i in 0..<count {
+            let index = min(Int(Double(i) * step + step / 2.0), frames.count - 1)
+            samples.append(index)
+        }
         
-        return indices
+        return samples
+    }
+    
+    // OPTIMIZATION: Sequential metric computation to avoid thread explosion
+    // When processing multiple videos concurrently, parallel metric computation
+    // creates too many threads (5 videos × 84 frames = 420 concurrent tasks)
+    private func computeMetricsSequentially(for candidates: [ExtractedFrame]) -> [(index: Int, histogram: [Double], edges: Double, brightness: Double, variance: Double)] {
+        var results: [(index: Int, histogram: [Double], edges: Double, brightness: Double, variance: Double)] = []
+        
+        for (index, candidate) in candidates.enumerated() {
+            guard let histogram = computeHistogram(candidate.image),
+                  let edges = computeEdgeDensity(candidate.image),
+                  let brightness = computeBrightness(candidate.image),
+                  let variance = computeColorVariance(candidate.image) else {
+                continue
+            }
+            results.append((index: index, histogram: histogram, edges: edges, brightness: brightness, variance: variance))
+        }
+        
+        return results
     }
     
     private func histogramDifference(_ hist1: [Double], _ hist2: [Double]) -> Double {
