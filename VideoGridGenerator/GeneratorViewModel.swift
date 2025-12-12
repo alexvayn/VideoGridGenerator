@@ -14,6 +14,7 @@ struct VideoJob: Identifiable {
     var isComplete: Bool = false
     var isCancelled: Bool = false
     var hasSecurityAccess: Bool = false
+    var wasFromCache: Bool = false  // Q2: Track cache hits
 }
 
 enum AspectMode: String, CaseIterable {
@@ -45,6 +46,32 @@ class GeneratorViewModel: ObservableObject {
     @AppStorage("aspectMode") var aspectMode: String = AspectMode.fill.rawValue
     @AppStorage("backgroundTheme") var backgroundTheme: String = BackgroundTheme.black.rawValue
     @AppStorage("showTimestamps") var showTimestamps: Bool = true
+    @AppStorage("autoRevealInFinder") var autoRevealInFinder: Bool = true  // Q1: Optional reveal
+    
+    // Q4: Compute expected grid resolution (mirrors GridComposer logic)
+    var expectedGridSize: (width: Int, height: Int) {
+        let borderWidth = 2
+        let framePadding = 8
+        let titleHeight = 90
+        let bottomPadding = 20
+        
+        let totalPadding = framePadding * (columns + 1) + (borderWidth * 2 * columns)
+        let thumbnailWidth = (targetWidth - totalPadding) / columns
+        
+        // Height depends on aspect mode (default to 16:9 for Fill/Fit)
+        let thumbnailHeight: Int
+        if AspectMode(rawValue: aspectMode) == .source {
+            // Source mode varies, use 16:9 as estimate
+            thumbnailHeight = Int(Double(thumbnailWidth) * 9.0 / 16.0)
+        } else {
+            thumbnailHeight = Int(Double(thumbnailWidth) * 9.0 / 16.0)
+        }
+        
+        let gridWidth = (thumbnailWidth + borderWidth * 2) * columns + framePadding * (columns + 1)
+        let gridHeight = (thumbnailHeight + borderWidth * 2) * rows + framePadding * (rows + 1) + titleHeight + bottomPadding
+        
+        return (width: gridWidth, height: gridHeight)
+    }
     
     private var cancellationTokens: Set<UUID> = []
     private let frameExtractor = FrameExtractor()
@@ -182,10 +209,13 @@ class GeneratorViewModel: ObservableObject {
             
             await MainActor.run {
                 isProcessing = false
-                if let firstJobId = jobOrder.first,
-                   let firstJob = videoJobs[firstJobId] {
-                    let folderURL = firstJob.url.deletingLastPathComponent()
-                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: folderURL.path)
+                // Q1: Optional reveal - only if enabled
+                if autoRevealInFinder {
+                    if let firstJobId = jobOrder.first,
+                       let firstJob = videoJobs[firstJobId] {
+                        let folderURL = firstJob.url.deletingLastPathComponent()
+                        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: folderURL.path)
+                    }
                 }
             }
         }
@@ -280,7 +310,8 @@ class GeneratorViewModel: ObservableObject {
             )
             
             // Frame extraction is 80% of the work
-            let frames = try await frameExtractor.extractFrames(
+            // Q2: Capture fromCache status
+            let (frames, fromCache) = try await frameExtractor.extractFrames(
                 from: url,
                 count: rows * columns,
                 progressCallback: { progress in
@@ -299,6 +330,11 @@ class GeneratorViewModel: ObservableObject {
                     }
                 }
             )
+            
+            // Q2: Store cache status on job
+            await updateJob(jobId: jobId) { job in
+                job.wasFromCache = fromCache
+            }
             
             guard !Task.isCancelled && !cancellationTokens.contains(jobId) else {
                 await updateJob(jobId: jobId) { job in
@@ -390,6 +426,17 @@ class GeneratorViewModel: ObservableObject {
         jobOrder.removeAll()
         completedCount = 0
         lastOutputPath = nil
+    }
+    
+    // Q3: Reset grid settings to recommended defaults
+    func resetToDefaults() {
+        columns = 6
+        rows = 5
+        targetWidth = 2560
+        aspectMode = AspectMode.fill.rawValue
+        backgroundTheme = BackgroundTheme.black.rawValue
+        showTimestamps = true
+        maxConcurrent = 3
     }
 }
 

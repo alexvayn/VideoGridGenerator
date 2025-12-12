@@ -200,42 +200,49 @@ struct ContentView: View {
     }
     
     private var outputFolderView: some View {
-        HStack(spacing: 12) {
-            if let folder = viewModel.outputFolderURL {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(folder.lastPathComponent)
-                        .font(.subheadline)
-                    Text(folder.path)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                if let folder = viewModel.outputFolderURL {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(folder.lastPathComponent)
+                            .font(.subheadline)
+                        Text(folder.path)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(Color.accentColor.opacity(0.1))
+                    .cornerRadius(5)
+                    
+                    Button("Change") {
+                        viewModel.selectOutputFolder()
+                    }
+                    .buttonStyle(.bordered)
+                    
+                    Button("Clear") {
+                        viewModel.clearOutputFolder()
+                    }
+                    .buttonStyle(.borderless)
+                } else {
+                    Text("Same as video (or Downloads if no permission)")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    
+                    Button("Set Output Folder") {
+                        viewModel.selectOutputFolder()
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
-                .background(Color.accentColor.opacity(0.1))
-                .cornerRadius(5)
-                
-                Button("Change") {
-                    viewModel.selectOutputFolder()
-                }
-                .buttonStyle(.bordered)
-                
-                Button("Clear") {
-                    viewModel.clearOutputFolder()
-                }
-                .buttonStyle(.borderless)
-            } else {
-                Text("Same as video (or Downloads if no permission)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                
-                Button("Set Output Folder") {
-                    viewModel.selectOutputFolder()
-                }
-                .buttonStyle(.bordered)
             }
+            
+            // Q1: Reveal when done checkbox
+            Toggle("Reveal folder when done", isOn: $viewModel.autoRevealInFinder)
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
     }
     
@@ -247,6 +254,16 @@ struct ContentView: View {
                 
                 Stepper("\(viewModel.rows) rows", value: $viewModel.rows, in: 1...10)
                     .frame(width: 150)
+                
+                Spacer()
+                
+                // Q3: Reset to defaults button
+                Button("Reset to Recommended") {
+                    viewModel.resetToDefaults()
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+                .foregroundColor(.accentColor)
             }
             
             Picker("Output Width", selection: $viewModel.targetWidth) {
@@ -256,6 +273,12 @@ struct ContentView: View {
                 Text("3840px (4K)").tag(3840)
             }
             .pickerStyle(SegmentedPickerStyle())
+            
+            // Q4: Display expected resolution
+            let gridSize = viewModel.expectedGridSize
+            Text("Will generate: \(viewModel.columns)×\(viewModel.rows) at \(gridSize.width) × \(gridSize.height) px")
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
     }
     
@@ -470,6 +493,12 @@ struct ContentView: View {
                     .font(.caption)
                     .lineLimit(1)
                 Spacer()
+                // Q2: Show cache indicator
+                if job.wasFromCache {
+                    Text("⚡ Cached")
+                        .font(.caption2)
+                        .foregroundColor(.yellow)
+                }
                 if job.isCancelled {
                     Text("Cancelled")
                         .font(.caption2)

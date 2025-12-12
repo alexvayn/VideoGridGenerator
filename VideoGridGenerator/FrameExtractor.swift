@@ -2,10 +2,6 @@ import AVFoundation
 import AppKit
 import CryptoKit
 
-struct ExtractedFrame {
-    let image: NSImage
-    let timestamp: CMTime
-}
 
 class FrameExtractor {
     
@@ -124,7 +120,8 @@ class FrameExtractor {
     
     // MARK: - Frame Extraction
     
-    func extractFrames(from url: URL, count: Int, progressCallback: @escaping (Double) -> Void) async throws -> [ExtractedFrame] {
+    // Q2: Return tuple with fromCache indicator
+    func extractFrames(from url: URL, count: Int, progressCallback: @escaping (Double) -> Void) async throws -> (frames: [ExtractedFrame], fromCache: Bool) {
         let startTime = CFAbsoluteTimeGetCurrent()
         
         // Check cache first
@@ -134,7 +131,7 @@ class FrameExtractor {
                 let cacheTime = CFAbsoluteTimeGetCurrent() - startTime
                 print("⏱️  CACHED extraction took: \(String(format: "%.2f", cacheTime))s (instant!)")
                 progressCallback(1.0)
-                return cached
+                return (frames: cached, fromCache: true)
             } else {
                 print("⚠️ Cache corrupted, extracting fresh frames")
             }
@@ -213,7 +210,7 @@ class FrameExtractor {
         saveFramesToCache(selectedFrames, for: url, frameCount: count)
         
         progressCallback(1.0)
-        return selectedFrames
+        return (frames: selectedFrames, fromCache: false)
     }
     
     // MARK: - OPTIMIZED Frame Selection (10-20x faster)
