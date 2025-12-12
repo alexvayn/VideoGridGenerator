@@ -211,7 +211,18 @@ class GeneratorViewModel: ObservableObject {
     
     private func processVideosWithSemaphore() async {
         await withTaskGroup(of: Void.self) { group in
-            let semaphore = AsyncSemaphore(value: maxConcurrent)
+            // S1: Clamp concurrency to reasonable limits
+            let requestedConcurrency = maxConcurrent
+            let availableCores = ProcessInfo.processInfo.activeProcessorCount
+            let jobCount = jobOrder.count
+            
+            let effectiveConcurrency = min(requestedConcurrency, availableCores, max(1, jobCount))
+            
+            if debugLogging {
+                print("🔧 Concurrency: requested=\(requestedConcurrency), cores=\(availableCores), jobs=\(jobCount), effective=\(effectiveConcurrency)")
+            }
+            
+            let semaphore = AsyncSemaphore(value: effectiveConcurrency)
             
             for jobId in jobOrder {
                 // Check if task is cancelled before adding new work
@@ -363,6 +374,11 @@ class GeneratorViewModel: ObservableObject {
     }
     
     func clearAll() {
+        // S2: Cancel generation if processing before clearing
+        if isProcessing {
+            cancelGeneration()
+        }
+        
         // Release security access for all jobs
         for (_, job) in videoJobs {
             if job.hasSecurityAccess {

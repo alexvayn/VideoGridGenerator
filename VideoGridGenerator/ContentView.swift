@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @StateObject private var viewModel = GeneratorViewModel()
+    @ObservedObject var viewModel: GeneratorViewModel
     @State private var isDragOver = false
     
     var body: some View {
